@@ -121,8 +121,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             }
         }
 
-        let paragraph =
-            Paragraph::new(display).style(Style::default().bg(theme.bg).fg(theme.fg));
+        let paragraph = Paragraph::new(display).style(Style::default().bg(theme.bg).fg(theme.fg));
         frame.render_widget(paragraph, inner);
         return;
     }

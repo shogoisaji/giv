@@ -140,13 +140,7 @@ impl Diff {
         self.files
             .iter()
             .flat_map(|f| f.hunks.iter())
-            .map(|h| {
-                h.header.len()
-                    + h.lines
-                        .iter()
-                        .map(|l| l.text.len() + 1)
-                        .sum::<usize>()
-            })
+            .map(|h| h.header.len() + h.lines.iter().map(|l| l.text.len() + 1).sum::<usize>())
             .sum()
     }
 
@@ -223,7 +217,10 @@ mod tests {
     fn mk_hunk(n_body: usize) -> Hunk {
         Hunk {
             header: "@@ -1,1 +1,N @@".into(),
-            old_start: 1, old_lines: 1, new_start: 1, new_lines: n_body as u32,
+            old_start: 1,
+            old_lines: 1,
+            new_start: 1,
+            new_lines: n_body as u32,
             lines: (0..n_body)
                 .map(|i| DiffLine {
                     kind: DiffLineKind::Added,

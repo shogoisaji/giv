@@ -296,13 +296,22 @@ mod tests {
     }
 
     fn mk_added(text: &str) -> DiffLine {
-        DiffLine { kind: DiffLineKind::Added, text: text.into() }
+        DiffLine {
+            kind: DiffLineKind::Added,
+            text: text.into(),
+        }
     }
     fn mk_context(text: &str) -> DiffLine {
-        DiffLine { kind: DiffLineKind::Context, text: text.into() }
+        DiffLine {
+            kind: DiffLineKind::Context,
+            text: text.into(),
+        }
     }
     fn mk_removed(text: &str) -> DiffLine {
-        DiffLine { kind: DiffLineKind::Removed, text: text.into() }
+        DiffLine {
+            kind: DiffLineKind::Removed,
+            text: text.into(),
+        }
     }
 
     fn big_hunk_diff(n_added: usize) -> Diff {
@@ -313,8 +322,13 @@ mod tests {
                 is_binary: false,
                 hunks: vec![Hunk {
                     header: "@@ -1,1 +1,N @@".into(),
-                    old_start: 1, old_lines: 1, new_start: 1, new_lines: n_added as u32,
-                    lines: (0..n_added).map(|i| mk_added(&format!("line {i}"))).collect(),
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: n_added as u32,
+                    lines: (0..n_added)
+                        .map(|i| mk_added(&format!("line {i}")))
+                        .collect(),
                 }],
             }],
         }
@@ -372,7 +386,10 @@ mod tests {
                 is_binary: false,
                 hunks: vec![Hunk {
                     header: "@@ -1,2 +1,2 @@".into(),
-                    old_start: 1, old_lines: 2, new_start: 1, new_lines: 2,
+                    old_start: 1,
+                    old_lines: 2,
+                    new_start: 1,
+                    new_lines: 2,
                     lines: vec![
                         mk_removed("hello world"),
                         mk_added("hello rust"),
@@ -407,7 +424,10 @@ mod tests {
                 is_binary: false,
                 hunks: vec![Hunk {
                     header: "@@ -1,5 +1,0 @@".into(),
-                    old_start: 1, old_lines: 5, new_start: 1, new_lines: 0,
+                    old_start: 1,
+                    old_lines: 5,
+                    new_start: 1,
+                    new_lines: 0,
                     lines: vec![
                         mk_removed("r0"),
                         mk_removed("r1"),

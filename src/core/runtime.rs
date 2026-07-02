@@ -138,9 +138,7 @@ fn run_event_loop(
                 // Drain the rest of the queued events without rendering.
                 // Quit events break immediately so the user gets instant
                 // feedback.
-                while !app.should_quit
-                    && crossterm::event::poll(Duration::ZERO).unwrap_or(false)
-                {
+                while !app.should_quit && crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
                     if let Ok(Some(action)) = next_action(&app.keymap, &app, Duration::ZERO) {
                         let effect = update(&mut app, action);
                         handle_effect(&mut app, effect);

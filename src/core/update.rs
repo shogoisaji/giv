@@ -403,8 +403,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                     Mode::Branches => {
                         let total = branches_view::branch_total_rows(app);
                         let max = view_scroll_max(total, app.ui.branch_viewport.get());
-                        app.ui.branch_offset =
-                            (app.ui.branch_offset + WHEEL_SCROLL_LINES).min(max);
+                        app.ui.branch_offset = (app.ui.branch_offset + WHEEL_SCROLL_LINES).min(max);
                     }
                     Mode::Worktrees => {
                         let total = app.worktrees.len();
@@ -415,8 +414,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                     Mode::Stashes => {
                         let total = app.stashes.len();
                         let max = view_scroll_max(total, app.ui.stash_viewport.get());
-                        app.ui.stash_offset =
-                            (app.ui.stash_offset + WHEEL_SCROLL_LINES).min(max);
+                        app.ui.stash_offset = (app.ui.stash_offset + WHEEL_SCROLL_LINES).min(max);
                     }
                     _ => {}
                 },
@@ -1896,7 +1894,10 @@ mod tests {
         update(&mut app, Action::ScrollListDown);
         assert_eq!(app.ui.stash_offset, 5);
         update(&mut app, Action::ScrollListDown);
-        assert_eq!(app.ui.stash_offset, 5, "must not scroll past total-viewport");
+        assert_eq!(
+            app.ui.stash_offset, 5,
+            "must not scroll past total-viewport"
+        );
     }
 
     #[test]
@@ -1931,7 +1932,10 @@ mod tests {
         }
         assert_eq!(app.ui.graph_offset, 5);
         update(&mut app, Action::ScrollGraphDown);
-        assert_eq!(app.ui.graph_offset, 5, "must not scroll past total-viewport");
+        assert_eq!(
+            app.ui.graph_offset, 5,
+            "must not scroll past total-viewport"
+        );
     }
 
     // ── diff_scroll clamping ───────────────────────────────────────────────
@@ -1955,7 +1959,10 @@ mod tests {
                 is_binary: false,
                 hunks: vec![Hunk {
                     header: "@@ -1,1 +1,5 @@".into(),
-                    old_start: 1, old_lines: 1, new_start: 1, new_lines: 5,
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 5,
                     lines: (0..5)
                         .map(|i| DiffLine {
                             kind: DiffLineKind::Added,
