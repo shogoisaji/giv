@@ -17,15 +17,125 @@
 ///
 /// Footer shows key hints.  The view never panics on empty data.
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 
 use crate::app::App;
 use crate::git::types::RefKind;
+
+// ─── Display-row geometry ─────────────────────────────────────────────────────
+//
+// The branches list interleaves non-selectable rows (group headers, empty-group
+// placeholders) with the selectable branch/tag rows, so the cursor's logical
+// index ≠ its display row. Auto-scroll (`clamp_branch_offset`) and the mouse
+// click handler need the display row to keep the selection on-screen / map a
+// clicked row back to a logical index. These helpers must stay in sync with the
+// row layout built in [`render_branch_panel`].
+
+/// Partition the branches into (locals, remotes). Tags come from `app.tags`.
+fn partition(
+    app: &App,
+) -> (
+    Vec<&crate::git::types::Branch>,
+    Vec<&crate::git::types::Branch>,
+) {
+    let branches = app.branches.as_slice();
+    let locals: Vec<_> = branches
+        .iter()
+        .filter(|b| matches!(b.kind, RefKind::LocalBranch | RefKind::Head))
+        .collect();
+    let remotes: Vec<_> = branches
+        .iter()
+        .filter(|b| matches!(b.kind, RefKind::RemoteBranch))
+        .collect();
+    (locals, remotes)
+}
+
+/// Total number of selectable branch/tag rows.
+pub fn branch_row_count(app: &App) -> usize {
+    let (locals, remotes) = partition(app);
+    locals.len() + remotes.len() + app.tags.len()
+}
+
+/// Total number of rendered rows (headers + placeholders + entries).
+pub fn branch_total_rows(app: &App) -> usize {
+    let (locals, remotes) = partition(app);
+    let tags = app.tags.as_slice();
+    if branch_row_count(app) == 0 {
+        return 0;
+    }
+    // Local header + locals block (≥1) + Remotes header + remotes block (≥1).
+    let mut rows = 1 + locals.len().max(1) + 1 + remotes.len().max(1);
+    if !tags.is_empty() {
+        rows += 1 + tags.len();
+    }
+    rows
+}
+
+/// The display row (with headers/placeholders counted) of the currently
+/// selected logical branch/tag index. Mirrors [`render_branch_panel`]'s layout.
+pub fn branch_selected_display_row(app: &App) -> usize {
+    let (locals, remotes) = partition(app);
+    let total = branch_row_count(app);
+    if total == 0 {
+        return 0;
+    }
+    let sel = app.ui.branch_index.min(total - 1);
+    if sel < locals.len() {
+        // Local header at row 0, files start at row 1.
+        1 + sel
+    } else if sel < locals.len() + remotes.len() {
+        let rem_sel = sel - locals.len();
+        // Local header(1) + locals block(max(1)) + Remotes header(1) + rem_sel.
+        1 + locals.len().max(1) + 1 + rem_sel
+    } else {
+        let tag_sel = sel - locals.len() - remotes.len();
+        // … + remotes block(max(1)) + Tags header(1) + tag_sel.
+        1 + locals.len().max(1) + 1 + remotes.len().max(1) + 1 + tag_sel
+    }
+}
+
+/// Inverse of [`branch_selected_display_row`]: convert a display row (including
+/// headers/placeholders) back to a logical branch/tag index. Used by the mouse
+/// click handler. Non-selectable rows clamp to the nearest selectable index.
+pub fn branch_display_row_to_logical(app: &App, display_row: usize) -> usize {
+    let (locals, remotes) = partition(app);
+    let tags = app.tags.as_slice();
+    let total = branch_row_count(app);
+    if total == 0 {
+        return 0;
+    }
+    let local_header = 0usize;
+    let local_block = locals.len().max(1);
+    let remote_header = 1 + local_block;
+    let remote_block = remotes.len().max(1);
+    let tags_header = 1 + local_block + 1 + remote_block;
+
+    // Local header or first local row → first local.
+    if display_row <= local_header + locals.len() {
+        return display_row
+            .saturating_sub(local_header + 1)
+            .min(locals.len().saturating_sub(1));
+    }
+    // Remotes header or first remote row.
+    if display_row <= remote_header + remotes.len() {
+        let r = display_row.saturating_sub(remote_header + 1);
+        return locals.len() + r.min(remotes.len().saturating_sub(1));
+    }
+    // Tags header or first tag row.
+    if !tags.is_empty() && display_row >= tags_header {
+        let t = display_row.saturating_sub(tags_header + 1);
+        return (locals.len() + remotes.len()) + t.min(tags.len().saturating_sub(1));
+    }
+    total.saturating_sub(1)
+}
 
 /// Render the Branches mode.
 ///
@@ -62,19 +172,13 @@ fn render_branch_panel(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Record the visible height so navigation can auto-scroll to follow the
+    // cursor (mirrors `list_viewport` / `graph_viewport`).
+    app.ui.branch_viewport.set(inner.height as usize);
+
     // ── Partition into local / remote / tags ─────────────────────────────────
-    let branches = app.branches.as_slice();
+    let (locals, remotes) = partition(app);
     let tags = app.tags.as_slice();
-
-    let locals: Vec<_> = branches
-        .iter()
-        .filter(|b| matches!(b.kind, RefKind::LocalBranch | RefKind::Head))
-        .collect();
-
-    let remotes: Vec<_> = branches
-        .iter()
-        .filter(|b| matches!(b.kind, RefKind::RemoteBranch))
-        .collect();
 
     // Build the flat list of selectable items (headers are not selectable).
     // logical_index increments only for actual branch/tag rows.
@@ -186,8 +290,35 @@ fn render_branch_panel(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let list = List::new(items).style(Style::default().bg(theme.bg));
+    // Scroll the rendered rows so the selection stays on-screen. `branch_offset`
+    // is maintained by `clamp_branch_offset` after every selection change and by
+    // the mouse-wheel view-scroll; the `.min` here is a defensive bound in case
+    // the list shrank since.
+    let total_rows = items.len();
+    let offset = app.ui.branch_offset.min(total_rows.saturating_sub(1));
+    let visible: Vec<ListItem> = items.into_iter().skip(offset).collect();
+
+    let list = List::new(visible).style(Style::default().bg(theme.bg));
     frame.render_widget(list, inner);
+
+    // Scrollbar on the right edge when the list overflows the viewport.
+    if total_rows > inner.height as usize {
+        let mut sb_state = ScrollbarState::new(total_rows).position(offset);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
+            .style(Style::default().fg(theme.dim));
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut sb_state,
+        );
+    }
 }
 
 // ─── Row builders ─────────────────────────────────────────────────────────────

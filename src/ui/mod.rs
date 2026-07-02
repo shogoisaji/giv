@@ -32,9 +32,8 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 /// Root view function — renders the entire UI for one frame.
 pub fn view(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    // Record the terminal width each frame so the model layer can make
-    // responsive layout decisions (two-pane vs three-pane dashboard) without
-    // re-querying the terminal.
+    // Record the terminal width each frame so the model layer can make layout
+    // policy decisions without re-querying the terminal.
     app.ui.width.set(area.width);
     // Clear stale panel/tab rects from the previous frame so the mouse handler
     // never sees areas from a layout that's no longer active. Must happen BEFORE
@@ -488,8 +487,8 @@ fn render_mode_tabs(frame: &mut Frame, area: Rect, app: &App) {
 // ─── Main content area ───────────────────────────────────────────────────────
 
 fn render_main(frame: &mut Frame, area: Rect, app: &App) {
-    // Wide terminals show the three-pane dashboard for Status and Graph; every
-    // other mode (and narrow terminals) keep the mode's own two-pane layout.
+    // Current layout policy keeps each selected tab in its own two-pane view.
+    // The dashboard branch remains available if `pane_layout` opts into it later.
     if matches!(
         app.ui.pane_layout(app.mode),
         crate::ui::layout::PaneLayout::ThreePane

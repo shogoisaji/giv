@@ -109,13 +109,87 @@ pub(crate) fn load_stash_diff(app: &mut App) {
     let idx = app.ui.stash_index;
     if app.stashes.get(idx).is_some() {
         match app.repo.backend.stash_show(idx) {
-            Ok(diff) => app.repo.selected_diff = Some(diff),
+            Ok(diff) => {
+                app.repo.selected_diff = Some(diff);
+                app.repo.selected_diff_key = None;
+            }
             Err(e) => {
                 app.status_message = Some(format!("Stash diff failed: {e:#}"));
                 app.repo.selected_diff = None;
+                app.repo.selected_diff_key = None;
             }
         }
     } else {
         app.repo.selected_diff = None;
+        app.repo.selected_diff_key = None;
+    }
+}
+
+// ─── View-scroll clamp ──────────────────────────────────────────────────────────
+
+/// Keep the selected stash row visible in the Stashes panel by adjusting
+/// `stash_offset`. The stash list has no group headers, so the display row
+/// equals `stash_index`. Mirrors `clamp_graph_offset` / `clamp_branch_offset`.
+/// Called from `reload_selected_diff` after the selection or list changes.
+pub(crate) fn clamp_stash_offset(app: &mut App) {
+    let row = app.ui.stash_index.min(app.stashes.len().saturating_sub(1));
+    let viewport = app.ui.stash_viewport.get().max(1);
+
+    if row < app.ui.stash_offset {
+        app.ui.stash_offset = row;
+    } else if row >= app.ui.stash_offset + viewport {
+        app.ui.stash_offset = row + 1 - viewport;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::git::types::Stash;
+    use crate::test_backend::MockBackend;
+
+    fn mk_stash(index: usize) -> Stash {
+        Stash {
+            index,
+            message: format!("msg {index}"),
+            oid: "deadbeef".into(),
+        }
+    }
+
+    fn build_app_with_stashes(n: usize) -> App {
+        let mut backend = MockBackend::new();
+        backend.stashes = (0..n).map(mk_stash).collect();
+        App::new(Box::new(backend), Config::default()).expect("app builds")
+    }
+
+    #[test]
+    fn clamp_stash_offset_pulls_view_down_to_cursor() {
+        let mut app = build_app_with_stashes(5);
+        app.ui.stash_index = 4;
+        app.ui.stash_offset = 0;
+        app.ui.stash_viewport.set(3);
+        clamp_stash_offset(&mut app);
+        assert_eq!(app.ui.stash_offset, 2); // 4 >= 0+3 → 4+1-3 = 2
+    }
+
+    #[test]
+    fn clamp_stash_offset_pulls_view_up_to_cursor() {
+        let mut app = build_app_with_stashes(5);
+        app.ui.stash_index = 0;
+        app.ui.stash_offset = 4;
+        app.ui.stash_viewport.set(3);
+        clamp_stash_offset(&mut app);
+        assert_eq!(app.ui.stash_offset, 0);
+    }
+
+    #[test]
+    fn clamp_stash_offset_noop_when_cursor_visible() {
+        let mut app = build_app_with_stashes(5);
+        app.ui.stash_index = 2;
+        app.ui.stash_offset = 1;
+        app.ui.stash_viewport.set(3);
+        clamp_stash_offset(&mut app);
+        assert_eq!(app.ui.stash_offset, 1);
     }
 }

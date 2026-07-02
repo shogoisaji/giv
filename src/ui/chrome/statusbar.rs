@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -15,7 +15,7 @@ use crate::git::OpKind;
 ///  1. Operation-in-progress banner (merge / rebase / cherry-pick / revert)
 ///  2. Background task spinner
 ///  3. Status / error message
-///  4. Normal: [ key hints (mode-specific) ] … [ branch + ahead/behind ]
+///  4. Normal: [ key hints (mode-specific) ]
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
 
@@ -92,57 +92,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // ── 4. Normal: hints (left) + branch info (right) ───────────────────────────
-    // Text selection is the default (mouse off). When mouse capture IS on, the
-    // terminal can't do native selection, so reserve extra width for an
-    // indicator that reminds the user to press `M` to get selection back.
-    let right_width = if app.mouse_capture { 44 } else { 30 };
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(right_width)])
-        .split(area);
-
+    // ── 4. Normal: key hints ───────────────────────────────────────────────────
     let hints = mode_hints(app);
-    let left = Paragraph::new(hints).style(Style::default().bg(theme.bg).fg(theme.fg));
-    frame.render_widget(left, chunks[0]);
-
-    // Right panel: branch + ahead/behind.
-    let branch = app.repo.status.branch.as_deref().unwrap_or("(no branch)");
-    let ahead = app.repo.status.ahead;
-    let behind = app.repo.status.behind;
-
-    let mut right_spans = vec![];
-    if app.mouse_capture {
-        // Persistent indicator: mouse capture is on, so native text selection
-        // is unavailable. Reminds the user to press `M` to get it back.
-        right_spans.push(Span::styled(
-            " \u{25cf} mouse ",
-            Style::default()
-                .fg(theme.unstaged)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    right_spans.push(Span::styled(" \u{2387} ", Style::default().fg(theme.dim)));
-    right_spans.push(Span::styled(
-        branch,
-        Style::default().fg(theme.head).add_modifier(Modifier::BOLD),
-    ));
-    if ahead > 0 {
-        right_spans.push(Span::styled(
-            format!(" \u{2191}{}", ahead),
-            Style::default().fg(theme.staged),
-        ));
-    }
-    if behind > 0 {
-        right_spans.push(Span::styled(
-            format!(" \u{2193}{}", behind),
-            Style::default().fg(theme.removed),
-        ));
-    }
-    right_spans.push(Span::styled(" ", Style::default()));
-
-    let right = Paragraph::new(Line::from(right_spans)).style(Style::default().bg(theme.bg));
-    frame.render_widget(right, chunks[1]);
+    let bar = Paragraph::new(hints).style(Style::default().bg(theme.bg).fg(theme.fg));
+    frame.render_widget(bar, area);
 }
 
 // ─── Mode-specific key hint builders ─────────────────────────────────────────
@@ -170,8 +123,7 @@ fn mode_hints(app: &App) -> Line<'static> {
 
     // Whether the diff panel has focus (Status/Graph, any layout) — then
     // movement scrolls the diff, so the hints change accordingly. Delegates to
-    // the model's layout-aware check so the three-pane dashboard (diff = Right
-    // panel) is handled too.
+    // the model's layout-aware check instead of assuming a concrete panel.
     let diff_focus = crate::update::diff_focused(app);
 
     let op_hints = |spans: &mut Vec<Span<'static>>| {

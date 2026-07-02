@@ -95,16 +95,17 @@ fn handle_mouse(app: &App, event: crossterm::event::MouseEvent) -> Action {
         );
 
     match event.kind {
-        // Wheel scrolls the diff when the diff panel is focused; in the graph
-        // list it scrolls the graph VIEW (like a normal scrollable area);
-        // elsewhere it moves the list selection.
+        // Wheel scrolls the focused panel's VIEW (display scroll) without moving
+        // the selection — diff / graph / list all behave like a normal
+        // scrollable area. Keyboard ↑/↓ still moves the selection (with
+        // auto-scroll via `clamp_*_offset`).
         MouseEventKind::ScrollUp => {
             if diff_focused {
                 Action::ScrollDiffUp
             } else if matches!(app.mode, Mode::Graph) {
                 Action::ScrollGraphUp
             } else {
-                Action::Up
+                Action::ScrollListUp
             }
         }
         MouseEventKind::ScrollDown => {
@@ -113,7 +114,7 @@ fn handle_mouse(app: &App, event: crossterm::event::MouseEvent) -> Action {
             } else if matches!(app.mode, Mode::Graph) {
                 Action::ScrollGraphDown
             } else {
-                Action::Down
+                Action::ScrollListDown
             }
         }
         // Left click: find which panel was clicked from the last-rendered rects,

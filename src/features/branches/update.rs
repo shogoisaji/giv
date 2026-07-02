@@ -120,3 +120,73 @@ pub(crate) fn merge_selected(app: &mut App) -> Effect {
     }
     Effect::Refresh
 }
+
+// ─── View-scroll clamp ──────────────────────────────────────────────────────────
+
+/// Keep the selected branch/tag's display row visible in the Branches panel by
+/// adjusting `branch_offset`. Mirrors `clamp_graph_offset` / `clamp_list_offset`:
+/// the offset only moves when the selection leaves the viewport, so the view
+/// scrolls to follow the cursor instead of letting the selection jump
+/// off-screen. Works on the *display row* (headers / placeholders included) so
+/// the group headers are accounted for. Called from `reload_selected_diff`
+/// after the selection or list changes.
+pub(crate) fn clamp_branch_offset(app: &mut App) {
+    let row = crate::features::branches::view::branch_selected_display_row(app);
+    let viewport = app.ui.branch_viewport.get().max(1);
+
+    if row < app.ui.branch_offset {
+        app.ui.branch_offset = row;
+    } else if row >= app.ui.branch_offset + viewport {
+        app.ui.branch_offset = row + 1 - viewport;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::test_backend::{mk_branch, MockBackend};
+
+    fn build_app_with_locals(n: usize) -> App {
+        let mut backend = MockBackend::new();
+        backend.branches = (0..n)
+            .map(|i| mk_branch(&format!("local{i}"), "deadbeef"))
+            .collect();
+        App::new(Box::new(backend), Config::default()).expect("app builds")
+    }
+
+    #[test]
+    fn clamp_branch_offset_pulls_view_down_to_cursor() {
+        // 5 locals → display rows 1..5. Cursor on row 5 (index 4), viewport 3,
+        // offset starts at 0: 5 >= 0+3, so offset becomes 5+1-3 = 3.
+        let mut app = build_app_with_locals(5);
+        app.ui.branch_index = 4;
+        app.ui.branch_offset = 0;
+        app.ui.branch_viewport.set(3);
+        clamp_branch_offset(&mut app);
+        assert_eq!(app.ui.branch_offset, 3);
+    }
+
+    #[test]
+    fn clamp_branch_offset_pulls_view_up_to_cursor() {
+        // Cursor on row 1 (index 0), viewport 3, offset starts at 5: 1 < 5,
+        // so offset becomes 1.
+        let mut app = build_app_with_locals(5);
+        app.ui.branch_index = 0;
+        app.ui.branch_offset = 5;
+        app.ui.branch_viewport.set(3);
+        clamp_branch_offset(&mut app);
+        assert_eq!(app.ui.branch_offset, 1);
+    }
+
+    #[test]
+    fn clamp_branch_offset_noop_when_cursor_visible() {
+        // Cursor on row 2 (index 1), viewport 3, offset 1: 2 is in [1, 4).
+        let mut app = build_app_with_locals(5);
+        app.ui.branch_index = 1;
+        app.ui.branch_offset = 1;
+        app.ui.branch_viewport.set(3);
+        clamp_branch_offset(&mut app);
+        assert_eq!(app.ui.branch_offset, 1);
+    }
+}

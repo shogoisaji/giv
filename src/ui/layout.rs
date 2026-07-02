@@ -1,11 +1,11 @@
-//! Responsive layout decisions.
+//! Pane layout decisions.
 //!
-//! The terminal width determines whether the main area renders the historical
-//! two-pane layout (left list + right detail) or, on wide terminals, a
-//! three-pane dashboard (`Graph | Changes | Diff`) that shows the repository
-//! overview without switching modes.
+//! The main area renders the selected tab's two-pane layout (left list + right
+//! detail/diff) at every terminal width. Width buckets are still classified here
+//! for tests and future width-aware policies, but they do not currently switch
+//! Status or Graph into a combined dashboard.
 //!
-//! All functions here are pure and side-effect-free so the breakpoint logic is
+//! All functions here are pure and side-effect-free so the layout policy is
 //! unit-testable without a TTY.
 
 use crate::app::{Mode, Panel};
@@ -15,12 +15,12 @@ use crate::app::{Mode, Panel};
 pub enum LayoutKind {
     /// Default width — two-pane layouts.
     Narrow,
-    /// Wide terminal — three-pane dashboard where applicable.
+    /// Wide terminal bucket.
     Wide,
 }
 
 impl LayoutKind {
-    /// Minimum terminal width (in columns) for the wide layout to activate.
+    /// Minimum terminal width (in columns) for the wide bucket.
     pub const WIDE_MIN_WIDTH: u16 = 150;
 
     /// Classify a terminal width into a layout bucket.
@@ -44,18 +44,10 @@ pub enum PaneLayout {
 
 /// Decide the main-area pane structure for `width` and the active `mode`.
 ///
-/// Only Status and Graph modes grow a third pane on wide terminals — they are
-/// the two modes that naturally combine a commit graph, a working-tree change
-/// list, and a diff. Branches / Worktrees / Stashes / Inspect keep the
-/// two-pane layout even when wide, since they have no natural third pane.
-pub fn pane_layout(width: u16, mode: Mode) -> PaneLayout {
-    if LayoutKind::for_width(width) == LayoutKind::Wide
-        && matches!(mode, Mode::Status | Mode::Graph)
-    {
-        PaneLayout::ThreePane
-    } else {
-        PaneLayout::TwoPane
-    }
+/// The current policy keeps every mode in its selected tab's two-pane layout,
+/// regardless of terminal width.
+pub fn pane_layout(_width: u16, _mode: Mode) -> PaneLayout {
+    PaneLayout::TwoPane
 }
 
 /// Panels that exist in a given pane layout.
@@ -156,7 +148,7 @@ pub fn pane_ratios(layout: PaneLayout, focused: Panel) -> Vec<u16> {
     }
 }
 
-/// Focus-weighted split dimensions for the three-pane dashboard.
+/// Focus-weighted split dimensions for the legacy three-pane dashboard helper.
 ///
 /// Layout: left column split vertically into Changes (top) + Graph (bottom),
 /// right column = Diff (full height).
@@ -230,10 +222,10 @@ mod tests {
     }
 
     #[test]
-    fn three_pane_for_status_and_graph_when_wide() {
+    fn two_pane_for_status_and_graph_even_when_wide() {
         let wide = 200;
-        assert_eq!(pane_layout(wide, Mode::Status), PaneLayout::ThreePane);
-        assert_eq!(pane_layout(wide, Mode::Graph), PaneLayout::ThreePane);
+        assert_eq!(pane_layout(wide, Mode::Status), PaneLayout::TwoPane);
+        assert_eq!(pane_layout(wide, Mode::Graph), PaneLayout::TwoPane);
     }
 
     #[test]

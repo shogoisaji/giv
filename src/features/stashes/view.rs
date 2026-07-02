@@ -1,8 +1,10 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
     Frame,
 };
 
@@ -65,12 +67,18 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().bg(theme.bg));
         frame.render_widget(p, inner);
     } else {
-        // Build visible list rows.
-        let list_height = inner.height as usize;
+        // The footer hint occupies the last inner row, so the list itself has
+        // `inner.height - 1` rows. Record that as the viewport so auto-scroll
+        // (`clamp_stash_offset`) keeps the selection visible above the footer.
+        let list_height = inner.height.saturating_sub(1) as usize;
+        app.ui.stash_viewport.set(list_height);
         let selected = stash_index.min(app.stashes.len().saturating_sub(1));
 
-        // Compute scroll offset so selected row is always visible.
-        let offset = compute_offset(selected, list_height, app.stashes.len());
+        // Scroll offset is maintained by `clamp_stash_offset` (keyboard nav)
+        // and the mouse-wheel view-scroll; the `.min` here is a defensive
+        // bound in case the list shrank since.
+        let total_rows = app.stashes.len();
+        let offset = app.ui.stash_offset.min(total_rows.saturating_sub(1));
 
         let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -117,6 +125,25 @@ fn render_list(frame: &mut Frame, area: Rect, app: &App) {
 
         let p = Paragraph::new(lines).style(Style::default().bg(theme.bg));
         frame.render_widget(p, inner);
+
+        // Scrollbar on the right edge when the list overflows the viewport.
+        if total_rows > list_height {
+            let mut sb_state = ScrollbarState::new(total_rows).position(offset);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .thumb_symbol("█")
+                .style(Style::default().fg(theme.dim));
+            frame.render_stateful_widget(
+                scrollbar,
+                area.inner(Margin {
+                    vertical: 1,
+                    horizontal: 0,
+                }),
+                &mut sb_state,
+            );
+        }
     }
 
     // Footer hint bar — rendered inside the outer block inner area at the bottom.
@@ -174,21 +201,6 @@ fn render_preview(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Compute a scroll offset so the `selected` item is visible in a viewport of
-/// `height` rows from a list of `total` items.
-fn compute_offset(selected: usize, height: usize, total: usize) -> usize {
-    if height == 0 || total == 0 {
-        return 0;
-    }
-    // Leave at least one row for the footer hint.
-    let visible = height.saturating_sub(1).max(1);
-    if selected < visible {
-        0
-    } else {
-        selected - visible + 1
-    }
-}
 
 fn hint_key(theme: &crate::theme::Theme, text: &'static str) -> Span<'static> {
     Span::styled(

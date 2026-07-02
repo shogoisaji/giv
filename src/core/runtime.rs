@@ -123,13 +123,36 @@ fn run_event_loop(
         }
 
         // ── Input events ─────────────────────────────────────────────────────
+        // Read one event (blocking up to `poll_timeout`).  Then drain any
+        // additional events that are already queued (poll(0)) BEFORE the next
+        // render.  This prevents a burst of mouse-wheel / key events from
+        // causing one full `terminal.draw()` per event — which on a large
+        // diff or a fast trackpad momentum-scroll can freeze the UI so hard
+        // that even Ctrl-C can't get processed.
         match next_action(&app.keymap, &app, poll_timeout).context("reading input event") {
             Err(e) => return (Err(e), None),
             Ok(Some(action)) => {
                 let effect = update(&mut app, action);
                 handle_effect(&mut app, effect);
+
+                // Drain the rest of the queued events without rendering.
+                // Quit events break immediately so the user gets instant
+                // feedback.
+                while !app.should_quit
+                    && crossterm::event::poll(Duration::ZERO).unwrap_or(false)
+                {
+                    if let Ok(Some(action)) = next_action(&app.keymap, &app, Duration::ZERO) {
+                        let effect = update(&mut app, action);
+                        handle_effect(&mut app, effect);
+                    } else {
+                        break;
+                    }
+                }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                let effect = update(&mut app, Action::LoadPendingGraphDiff);
+                handle_effect(&mut app, effect);
+            }
         }
 
         // ── Background task results ──────────────────────────────────────────

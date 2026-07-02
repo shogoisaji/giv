@@ -1,8 +1,8 @@
-//! Wide-terminal three-pane dashboard: left column split vertically into
+//! Legacy three-pane dashboard helper: left column split vertically into
 //! Changes (top) + Graph (bottom), right column = Diff (full height).
 //!
-//! Activated by `ui::layout::pane_layout` for Status and Graph modes when the
-//! terminal is wide (>= 150 columns).
+//! The current `ui::layout::pane_layout` policy keeps every mode in two panes,
+//! so this renderer is only used if that policy opts into `ThreePane` again.
 //!
 //! ```text
 //! +----------+---------+
@@ -38,7 +38,7 @@ use ratatui::{
 use crate::app::{App, Panel};
 use crate::ui::layout::dashboard_splits;
 
-/// Render the three-pane dashboard into `area`.
+/// Render the legacy three-pane dashboard into `area`.
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let focused = *app.ui.panel();
     let splits = dashboard_splits(focused);

@@ -75,6 +75,19 @@ pub fn status_row_count(app: &App) -> usize {
     staged.len() + unstaged.len()
 }
 
+/// Total number of rendered rows in the Changes list (group headers + empty-
+/// group placeholders + file entries). Mirrors the layout built in
+/// [`render_file_list`]; used to clamp the mouse-wheel view-scroll so it never
+/// scrolls past the last row.
+pub fn status_total_display_rows(app: &App) -> usize {
+    let (staged, unstaged) = partition_entries(app);
+    if staged.len() + unstaged.len() == 0 {
+        return 0;
+    }
+    // Staged header + staged block (≥1) + Unstaged header + unstaged block (≥1).
+    1 + staged.len().max(1) + 1 + unstaged.len().max(1)
+}
+
 /// The *display row* (rendered list row, with group headers and the empty-group
 /// placeholders counted) of the currently selected logical file index.
 ///

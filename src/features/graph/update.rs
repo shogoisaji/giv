@@ -6,10 +6,12 @@
 //! is executed uniformly by the `ConfirmDelete` handler in [`crate::update`].
 
 use super::rebase_todo::{RebaseTodoEntry, RebaseTodoState};
-use crate::app::{App, ConfirmOp, Dialog, Mode};
+use crate::app::{App, ConfirmOp, Dialog, DiffKey, Mode};
 use crate::effect::Effect;
-use crate::git::{self, ResetMode};
+use crate::git::{self, Diff, ResetMode};
 use crate::update::{check_op_in_progress, reload_selected_diff};
+
+const COMMIT_DIFF_CACHE_CAP: usize = 64;
 
 // ─── Confirm-guarded history operations ─────────────────────────────────────────
 
@@ -439,14 +441,22 @@ pub(crate) fn load_graph_diff(app: &mut App) {
     // Branch-compare mode: show the cumulative `base...target` diff instead of
     // a single commit's diff. The commit list is still visible for navigation,
     // but the diff panel reflects the entire compared range.
+    app.pending_graph_diff = None;
+
     if let Some((base, target)) = &app.compare {
+        let key = DiffKey::Compare(base.clone(), target.clone());
+        if app.repo.selected_diff.is_some() && app.repo.selected_diff_key.as_ref() == Some(&key) {
+            return;
+        }
         match app.repo.backend.diff_between(base, target) {
             Ok(diff) => {
                 app.repo.selected_diff = Some(diff);
+                app.repo.selected_diff_key = Some(key);
             }
             Err(e) => {
                 app.status_message = Some(format!("Compare diff failed: {e:#}"));
                 app.repo.selected_diff = None;
+                app.repo.selected_diff_key = None;
             }
         }
         return;
@@ -456,17 +466,29 @@ pub(crate) fn load_graph_diff(app: &mut App) {
     let oid = app.repo.commits.get(idx).map(|c| c.id.clone());
 
     if let Some(oid) = oid {
+        let key = DiffKey::Commit(oid.clone());
+        if let Some(diff) = app.repo.commit_diff_cache.get(&oid).cloned() {
+            app.repo.selected_diff = Some(diff);
+            app.repo.selected_diff_key = Some(key);
+            app.repo.commit_diff_order.retain(|cached| cached != &oid);
+            app.repo.commit_diff_order.push_back(oid);
+            return;
+        }
         match app.repo.backend.commit_diff(&oid) {
             Ok(diff) => {
-                app.repo.selected_diff = Some(diff);
+                app.repo.selected_diff = Some(diff.clone());
+                app.repo.selected_diff_key = Some(key);
+                insert_commit_diff_cache(app, oid, diff);
             }
             Err(e) => {
                 app.status_message = Some(format!("Diff failed: {e:#}"));
                 app.repo.selected_diff = None;
+                app.repo.selected_diff_key = None;
             }
         }
     } else {
         app.repo.selected_diff = None;
+        app.repo.selected_diff_key = None;
     }
 }
 
@@ -483,5 +505,161 @@ pub(crate) fn clamp_graph_offset(app: &mut App) {
         app.ui.graph_offset = sel_row;
     } else if sel_row >= app.ui.graph_offset + viewport {
         app.ui.graph_offset = sel_row + 1 - viewport;
+    }
+}
+
+/// Upper bound on the commit-diff cache's total estimated heap footprint.
+/// Picked to comfortably absorb typical diffs (a few hundred KB each) while
+/// preventing a handful of huge generated-file / merge diffs from blowing
+/// up memory. The entry-count cap (`COMMIT_DIFF_CACHE_CAP`) still applies
+/// alongside this.
+const COMMIT_DIFF_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// Insert a commit diff into the LRU cache, evicting oldest entries until
+/// both the entry-count cap and the byte cap are satisfied. Extracted from
+/// `load_graph_diff` so the eviction policy is unit-testable without a git
+/// backend.
+///
+/// A diff whose own `estimated_size` exceeds the byte cap is not cached at
+/// all (it would evict everything else and still breach the limit); the
+/// caller simply re-fetches it next time. The byte-cap eviction loop keeps
+/// the just-inserted entry (the loop guard `len() > 1`), so a single small
+/// entry never evicts itself.
+pub(crate) fn insert_commit_diff_cache(app: &mut App, oid: String, diff: Diff) {
+    if diff.estimated_size() > COMMIT_DIFF_CACHE_MAX_BYTES {
+        return;
+    }
+    app.repo.commit_diff_cache.insert(oid.clone(), diff);
+    app.repo.commit_diff_order.retain(|c| c != &oid);
+    app.repo.commit_diff_order.push_back(oid);
+
+    // Entry-count cap.
+    while app.repo.commit_diff_order.len() > COMMIT_DIFF_CACHE_CAP {
+        if let Some(old) = app.repo.commit_diff_order.pop_front() {
+            app.repo.commit_diff_cache.remove(&old);
+        }
+    }
+    // Byte cap — evict oldest until the total estimated size fits. Guard on
+    // `len() > 1` so we never evict the entry we just inserted.
+    while total_cache_bytes(app) > COMMIT_DIFF_CACHE_MAX_BYTES
+        && app.repo.commit_diff_order.len() > 1
+    {
+        if let Some(old) = app.repo.commit_diff_order.pop_front() {
+            app.repo.commit_diff_cache.remove(&old);
+        }
+    }
+}
+
+/// Sum of `estimated_size` over every cached diff. O(n) over the cache; called
+/// only on insertion so the cost is amortised over a backend `commit_diff`
+/// fetch (which dominates).
+fn total_cache_bytes(app: &App) -> usize {
+    app.repo
+        .commit_diff_cache
+        .values()
+        .map(|d| d.estimated_size())
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::git::types::{Diff, DiffLine, DiffLineKind, FileDiff, Hunk};
+    use crate::test_backend::{mk_commit, MockBackend};
+
+    fn build_app(n_commits: usize) -> App {
+        let mut b = MockBackend::new();
+        b.commits = (0..n_commits)
+            .map(|i| mk_commit(&format!("c{i}"), &format!("c{i}"), false))
+            .collect();
+        App::new(Box::new(b), Config::default()).expect("app builds")
+    }
+
+    fn mk_diff(text_len: usize) -> Diff {
+        Diff {
+            files: vec![FileDiff {
+                old_path: "a".into(),
+                new_path: "b".into(),
+                is_binary: false,
+                hunks: vec![Hunk {
+                    header: "@@@".into(),
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec![DiffLine {
+                        kind: DiffLineKind::Context,
+                        text: "x".repeat(text_len),
+                    }],
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn estimated_size_sums_line_text_plus_header() {
+        let d = mk_diff(100);
+        // header (3) + 1 line of 100 chars + 1 byte per line overhead.
+        assert_eq!(d.estimated_size(), 3 + 100 + 1);
+    }
+
+    #[test]
+    fn insert_keeps_recent_entries_under_byte_limit() {
+        let mut app = build_app(4);
+        for i in 0..4 {
+            insert_commit_diff_cache(&mut app, format!("c{i}"), mk_diff(1024));
+        }
+        assert_eq!(app.repo.commit_diff_cache.len(), 4);
+        assert!(total_cache_bytes(&app) <= COMMIT_DIFF_CACHE_MAX_BYTES);
+    }
+
+    #[test]
+    fn insert_skips_diff_that_alone_exceeds_byte_limit() {
+        // A single diff bigger than the byte cap is not cached at all.
+        let mut app = build_app(2);
+        let huge = COMMIT_DIFF_CACHE_MAX_BYTES + 1;
+        insert_commit_diff_cache(&mut app, "c0".into(), mk_diff(huge));
+        assert!(app.repo.commit_diff_cache.is_empty());
+        assert!(app.repo.commit_diff_order.is_empty());
+
+        // A subsequent small diff still caches normally.
+        insert_commit_diff_cache(&mut app, "c1".into(), mk_diff(1));
+        assert_eq!(app.repo.commit_diff_cache.len(), 1);
+        assert!(app.repo.commit_diff_cache.contains_key("c1"));
+    }
+
+    #[test]
+    fn insert_evicts_oldest_when_byte_limit_exceeded() {
+        // Three diffs of cap/3+1 each: any two fit, three overflow.
+        let each = COMMIT_DIFF_CACHE_MAX_BYTES / 3 + 1;
+        let mut app = build_app(3);
+        insert_commit_diff_cache(&mut app, "c0".into(), mk_diff(each));
+        insert_commit_diff_cache(&mut app, "c1".into(), mk_diff(each));
+        // c0 + c1 = 2*(cap/3+1) <= cap (since 2/3*cap + 2 < cap for cap>=6).
+        assert_eq!(app.repo.commit_diff_cache.len(), 2);
+
+        insert_commit_diff_cache(&mut app, "c2".into(), mk_diff(each));
+        // c0 (oldest) evicted; c1 and c2 remain.
+        assert_eq!(app.repo.commit_diff_cache.len(), 2);
+        assert!(app.repo.commit_diff_cache.contains_key("c1"));
+        assert!(app.repo.commit_diff_cache.contains_key("c2"));
+        assert!(!app.repo.commit_diff_cache.contains_key("c0"));
+    }
+
+    #[test]
+    fn insert_refreshes_lru_position_on_reinsert() {
+        // Same per-entry size as the eviction test: three entries overflow.
+        let each = COMMIT_DIFF_CACHE_MAX_BYTES / 3 + 1;
+        let mut app = build_app(3);
+        insert_commit_diff_cache(&mut app, "c0".into(), mk_diff(each));
+        insert_commit_diff_cache(&mut app, "c1".into(), mk_diff(each));
+        // Re-insert c0 — it becomes the newest, so c1 is now the oldest.
+        insert_commit_diff_cache(&mut app, "c0".into(), mk_diff(each));
+        insert_commit_diff_cache(&mut app, "c2".into(), mk_diff(each));
+        // c1 (oldest after c0's re-insertion) is evicted; c0 and c2 remain.
+        assert!(app.repo.commit_diff_cache.contains_key("c0"));
+        assert!(app.repo.commit_diff_cache.contains_key("c2"));
+        assert!(!app.repo.commit_diff_cache.contains_key("c1"));
     }
 }

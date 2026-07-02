@@ -37,6 +37,7 @@ pub enum Action {
     Top,
     Bottom,
     Select,
+    LoadPendingGraphDiff,
 
     // ── Staging ─────────────────────────────────────────────────────────────
     StageSelected,
@@ -66,6 +67,13 @@ pub enum Action {
     /// mouse wheel so the device scroll feels like scrolling the display.
     ScrollGraphUp,
     ScrollGraphDown,
+
+    /// Scroll the focused non-graph list VIEW (offset) without moving the
+    /// selection — used by the mouse wheel in Status / Branches / Worktrees /
+    /// Stashes so the device scroll feels like scrolling the display, mirroring
+    /// `ScrollGraphUp`/`ScrollGraphDown`.
+    ScrollListUp,
+    ScrollListDown,
 
     /// Adjust the Graph-mode left/right split by the given percent delta
     /// (negative = narrower graph panel). Bound to `<` / `>`.

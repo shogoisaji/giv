@@ -142,6 +142,12 @@ pub(crate) fn render_graph_list(frame: &mut Frame, area: Rect, app: &App, is_foc
                 main_tip.as_deref(),
                 head_tip.as_deref(),
             );
+            cache.lane_layout = Some(super::layout::compute_lanes_main(
+                commits,
+                first_parent,
+                main_tip.as_deref(),
+                head_tip.as_deref(),
+            ));
             cache.key = Some(key);
             // The row layout changed → selection-derived caches are stale.
             cache.hl = None;
@@ -160,13 +166,9 @@ pub(crate) fn render_graph_list(frame: &mut Frame, area: Rect, app: &App, is_foc
                 graph_index,
             );
             if cache.hl_key.as_ref() != Some(&hl_key) {
-                cache.hl = Some(super::layout::branch_highlight_main(
-                    commits,
-                    graph_index,
-                    first_parent,
-                    main_tip.as_deref(),
-                    head_tip.as_deref(),
-                ));
+                cache.hl = cache.lane_layout.as_ref().map(|lanes| {
+                    super::layout::branch_highlight_from_lanes(commits, lanes, graph_index)
+                });
                 cache.hl_key = Some(hl_key);
             }
         } else if cache.hl.is_some() {
