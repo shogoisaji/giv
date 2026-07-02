@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo check --locked
+        run: cargo check --locked
+      - name: cargo test
+        run: cargo test
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Release hygiene
+        run: bash scripts/release-check.sh
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --release
+      - name: Binary smoke test
+        run: target/release/giv debug version
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          archive="dist/giv-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          tar -C target/release -czf "$archive" giv
+          shasum -a 256 "$archive" > "$archive.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: giv-${{ matrix.target }}
+          path: dist/
+
+  source-archive:
+    name: Source archive checksum
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and checksum source archive
+        run: |
+          mkdir -p dist
+          archive_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          curl -L "$archive_url" -o "dist/giv-${GITHUB_REF_NAME}-source.tar.gz"
+          shasum -a 256 "dist/giv-${GITHUB_REF_NAME}-source.tar.gz" > "dist/giv-${GITHUB_REF_NAME}-source.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-archive
+          path: dist/
+
+  release:
+    name: Publish release
+    needs: [build, source-archive]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Consolidate checksums
+        run: |
+          cd dist
+          ls -la
+          cat *.sha256 > SHA256SUMS
+          rm *.sha256
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+      - name: Homebrew source checksum summary
+        run: |
+          {
+            echo "## Homebrew source archive"
+            echo
+            echo '```text'
+            grep source dist/SHA256SUMS
+            echo '```'
+            echo
+            echo "Use this SHA-256 with scripts/generate-homebrew-formula.sh."
+          } >> "$GITHUB_STEP_SUMMARY"

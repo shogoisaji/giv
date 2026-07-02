@@ -1,0 +1,12 @@
+# Baton
+.baton/locks/
+.baton/index/
+.baton/archive/
+
+/target
+*.log
+.DS_Store
+AGENTS.md
+
+# Stray build dep-info artifact (Cargo emits the real one under target/)
+/giv.d
