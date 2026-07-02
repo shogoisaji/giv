@@ -9,15 +9,19 @@ use giv::git::{CliBackend, GitBackend};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Create a temp directory with a unique suffix.
+/// Create a temp directory with a unique suffix. Uses process ID + atomic
+/// counter so paths never collide across parallel tests or repeated CI runs
+/// (subsec_nanos alone can clash, leaving stale `.git` dirs that cause
+/// `git init -b main` to silently keep the old default branch).
 fn tempdir(suffix: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let base = std::env::temp_dir().join(format!(
-        "giv_net_test_{}_{}",
+        "giv_net_test_{}_{}_{}",
         suffix,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos()
+        std::process::id(),
+        n,
     ));
     std::fs::create_dir_all(&base).expect("create temp dir");
     base
