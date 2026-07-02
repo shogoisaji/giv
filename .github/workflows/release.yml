@@ -62,7 +62,7 @@ jobs:
           archive="dist/giv-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
           tar -C target/release -czf "$archive" giv
           shasum -a 256 "$archive" > "$archive.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: giv-${{ matrix.target }}
           path: dist/
@@ -78,7 +78,7 @@ jobs:
           archive_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
           curl -L "$archive_url" -o "dist/giv-${GITHUB_REF_NAME}-source.tar.gz"
           shasum -a 256 "dist/giv-${GITHUB_REF_NAME}-source.tar.gz" > "dist/giv-${GITHUB_REF_NAME}-source.tar.gz.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: source-archive
           path: dist/
