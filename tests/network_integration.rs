@@ -33,6 +33,10 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .args(["-c", "color.ui=never", "--no-pager"])
         .args(args)
         .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "T")
+        .env("GIT_AUTHOR_EMAIL", "t@t.com")
+        .env("GIT_COMMITTER_NAME", "T")
+        .env("GIT_COMMITTER_EMAIL", "t@t.com")
         .output()
         .unwrap_or_else(|e| panic!("spawn git {}: {}", args.join(" "), e));
 
@@ -51,7 +55,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// Init a bare repository at `path`.
 fn init_bare(path: &Path) {
     let output = Command::new("git")
-        .args(["init", "--bare", "-q"])
+        .args(["init", "--bare", "-q", "-b", "main"])
         .arg(path)
         .output()
         .expect("spawn git init --bare");
@@ -59,21 +63,13 @@ fn init_bare(path: &Path) {
 }
 
 /// Init a normal repository at `path` with user config, one empty commit on `main`.
+/// Uses `git symbolic-ref` to force the branch name regardless of the system's
+/// `init.defaultBranch` config — `git init -b main` alone can be silently
+/// overridden by a global config on some CI runners.
 fn init_repo(path: &Path) {
-    git(path, &["init", "-b", "main", "-q"]);
-    git(
-        path,
-        &[
-            "-c",
-            "user.email=t@t.com",
-            "-c",
-            "user.name=T",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-    );
+    git(path, &["init", "-q"]);
+    git(path, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(path, &["commit", "--allow-empty", "-m", "initial"]);
 }
 
 /// Set up a CliBackend for a path that already has a git repo.
@@ -89,18 +85,7 @@ fn commit_file(dir: &Path, filename: &str, content: &str, message: &str) {
     let file_path = dir.join(filename);
     std::fs::write(&file_path, content).expect("write file");
     git(dir, &["add", "--", filename]);
-    git(
-        dir,
-        &[
-            "-c",
-            "user.email=t@t.com",
-            "-c",
-            "user.name=T",
-            "commit",
-            "-m",
-            message,
-        ],
-    );
+    git(dir, &["commit", "-m", message]);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -151,19 +136,7 @@ fn test_fetch_advances_remote_tracking_ref() {
 
     // Clone into work2 (simulates a second developer).
     git(&work2, &["clone", bare.to_str().unwrap(), "."]);
-    git(
-        &work2,
-        &[
-            "-c",
-            "user.email=t@t.com",
-            "-c",
-            "user.name=T",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "extra commit",
-        ],
-    );
+    git(&work2, &["commit", "--allow-empty", "-m", "extra commit"]);
     git(&work2, &["push", "origin", "main"]);
 
     // --- Act ---
@@ -198,16 +171,7 @@ fn test_pull_advances_local_branch() {
     git(&work2, &["clone", bare.to_str().unwrap(), "."]);
     git(
         &work2,
-        &[
-            "-c",
-            "user.email=t@t.com",
-            "-c",
-            "user.name=T",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "upstream commit",
-        ],
+        &["commit", "--allow-empty", "-m", "upstream commit"],
     );
     git(&work2, &["push", "origin", "main"]);
 
