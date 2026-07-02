@@ -52,10 +52,14 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 /// Initialise a repo with user config and an initial empty commit on `main`.
 /// Uses `git symbolic-ref` to force the branch name regardless of the system's
-/// `init.defaultBranch` config.
+/// `init.defaultBranch` config. Sets repo-local user.email/user.name so that
+/// `CliBackend` operations (merge, cherry-pick, rebase, etc.) have a committer
+/// identity even on CI runners without a global git config.
 fn init_repo(path: &Path) {
     git(path, &["init", "-q"]);
     git(path, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(path, &["config", "user.email", "t@t.com"]);
+    git(path, &["config", "user.name", "T"]);
     git(path, &["commit", "--allow-empty", "-m", "initial"]);
 }
 

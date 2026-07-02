@@ -64,11 +64,14 @@ fn init_bare(path: &Path) {
 
 /// Init a normal repository at `path` with user config, one empty commit on `main`.
 /// Uses `git symbolic-ref` to force the branch name regardless of the system's
-/// `init.defaultBranch` config — `git init -b main` alone can be silently
-/// overridden by a global config on some CI runners.
+/// `init.defaultBranch` config. Sets repo-local user.email/user.name so that
+/// `CliBackend` operations have a committer identity on CI runners without a
+/// global git config.
 fn init_repo(path: &Path) {
     git(path, &["init", "-q"]);
     git(path, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(path, &["config", "user.email", "t@t.com"]);
+    git(path, &["config", "user.name", "T"]);
     git(path, &["commit", "--allow-empty", "-m", "initial"]);
 }
 
