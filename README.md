@@ -11,6 +11,13 @@ Requirements:
 - Git available on `PATH`
 - Rust 1.88 or newer when building from source
 
+### Homebrew (macOS / Linux)
+
+```sh
+brew tap shogoisaji/giv
+brew install giv
+```
+
 ### Build from source
 
 ```sh
