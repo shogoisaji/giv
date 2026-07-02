@@ -129,6 +129,7 @@ pub(crate) fn submit_commit(app: &mut App, msg: String) -> Effect {
             clamp_list_index(app);
             // After a commit the list is likely empty; clear the diff.
             app.repo.selected_diff = None;
+            app.repo.selected_diff_key = None;
         }
         Err(e) => {
             app.status_message = Some(format!("Commit failed: {e:#}"));
@@ -185,14 +186,17 @@ pub(crate) fn load_status_diff(app: &mut App) {
         match app.repo.backend.file_diff(&path, staged) {
             Ok(diff) => {
                 app.repo.selected_diff = Some(diff);
+                app.repo.selected_diff_key = None;
             }
             Err(e) => {
                 app.status_message = Some(format!("Diff failed: {e:#}"));
                 app.repo.selected_diff = None;
+                app.repo.selected_diff_key = None;
             }
         }
     } else {
         app.repo.selected_diff = None;
+        app.repo.selected_diff_key = None;
     }
 }
 

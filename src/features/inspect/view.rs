@@ -48,9 +48,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             "  Press i (or Enter) to try another ref.",
             Style::default().fg(theme.dim),
         )));
-    } else if let Some(commit) = &app.inspect.commit {
-        // ── Metadata ──────────────────────────────────────────────────────────
-        lines.push(Line::from(vec![
+        // Error state is short — use the simple .scroll() path.
+        let paragraph = Paragraph::new(lines)
+            .style(Style::default().bg(theme.bg).fg(theme.fg))
+            .scroll((app.ui.diff_scroll, 0));
+        frame.render_widget(paragraph, inner);
+        return;
+    }
+
+    if let Some(commit) = &app.inspect.commit {
+        // ── Metadata (always short — build fully) ───────────────────────────
+        let mut meta_lines: Vec<Line<'static>> = Vec::new();
+        meta_lines.push(Line::from(vec![
             Span::styled("commit ".to_string(), Style::default().fg(theme.dim)),
             Span::styled(
                 commit.id.clone(),
@@ -59,52 +68,79 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
-        lines.push(Line::from(vec![
+        meta_lines.push(Line::from(vec![
             Span::styled("Author: ".to_string(), Style::default().fg(theme.dim)),
             Span::styled(
                 format!("{} <{}>", commit.author_name, commit.author_email),
                 Style::default().fg(theme.fg),
             ),
         ]));
-        lines.push(Line::from(vec![
+        meta_lines.push(Line::from(vec![
             Span::styled("Date:   ".to_string(), Style::default().fg(theme.dim)),
             Span::styled(format_timestamp(commit.time), Style::default().fg(theme.fg)),
         ]));
-        lines.push(Line::raw("".to_string()));
-        lines.push(Line::from(Span::styled(
+        meta_lines.push(Line::raw("".to_string()));
+        meta_lines.push(Line::from(Span::styled(
             format!("    {}", commit.summary),
             Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
         )));
         if !commit.body.is_empty() {
-            lines.push(Line::raw("".to_string()));
+            meta_lines.push(Line::raw("".to_string()));
             for body_line in commit.body.lines() {
-                lines.push(Line::from(Span::styled(
+                meta_lines.push(Line::from(Span::styled(
                     format!("    {}", body_line),
                     Style::default().fg(theme.fg),
                 )));
             }
         }
 
-        // ── Diff ──────────────────────────────────────────────────────────────
-        if let Some(diff) = &app.inspect.diff {
-            lines.extend(diff_lines(diff, app));
+        // ── Assemble visible window: metadata tail + diff head ──────────────
+        let scroll = app.ui.diff_scroll as usize;
+        let height = inner.height as usize;
+        let meta_count = meta_lines.len();
+        let mut display: Vec<Line<'static>> = Vec::with_capacity(height.min(256));
+
+        if height == 0 {
+            // Nothing to render.
+        } else if scroll < meta_count {
+            // Scroll is within the metadata block: show metadata tail, then
+            // fill the rest with the diff head.
+            let meta_take = (meta_count - scroll).min(height);
+            display.extend(meta_lines.into_iter().skip(scroll).take(meta_take));
+            let remaining = height - meta_take;
+            if remaining > 0 {
+                if let Some(diff) = &app.inspect.diff {
+                    display.extend(diff_lines_window(diff, app, 0, remaining));
+                }
+            }
+        } else {
+            // Scroll is past the metadata: entirely within the diff.
+            let diff_start = scroll - meta_count;
+            if let Some(diff) = &app.inspect.diff {
+                display.extend(diff_lines_window(diff, app, diff_start, height));
+            }
         }
-    } else {
-        lines.push(Line::from(Span::styled(
-            "  Enter a commit ref to inspect it.",
-            Style::default().fg(theme.fg),
-        )));
-        lines.push(Line::raw("".to_string()));
-        lines.push(Line::from(Span::styled(
-            "  Accepts a sha, short sha, branch, tag, or HEAD~1.",
-            Style::default().fg(theme.dim),
-        )));
-        lines.push(Line::raw("".to_string()));
-        lines.push(Line::from(Span::styled(
-            "  Press i or Enter to open the prompt.",
-            Style::default().fg(theme.dim),
-        )));
+
+        let paragraph = Paragraph::new(display).style(Style::default().bg(theme.bg).fg(theme.fg));
+        frame.render_widget(paragraph, inner);
+        return;
     }
+
+    // Empty / hint state — short, use simple .scroll().
+    lines.push(Line::from(Span::styled(
+        "  Enter a commit ref to inspect it.",
+        Style::default().fg(theme.fg),
+    )));
+    lines.push(Line::raw("".to_string()));
+    lines.push(Line::from(Span::styled(
+        "  Accepts a sha, short sha, branch, tag, or HEAD~1.",
+        Style::default().fg(theme.dim),
+    )));
+    lines.push(Line::raw("".to_string()));
+    lines.push(Line::from(Span::styled(
+        "  Press i or Enter to open the prompt.",
+        Style::default().fg(theme.dim),
+    )));
 
     let paragraph = Paragraph::new(lines)
         .style(Style::default().bg(theme.bg).fg(theme.fg))
@@ -112,49 +148,82 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, inner);
 }
 
-/// Build the colored diff lines for the inspected commit.
-fn diff_lines(diff: &Diff, app: &App) -> Vec<Line<'static>> {
+/// Build the colored diff lines for the inspected commit, emitting only the
+/// lines in `[start, start+count)`.  The Inspect panel interleaves a short
+/// metadata header (built separately in `render`) with the diff, so this
+/// function's line numbering starts at 0 = the first diff line (the summary
+/// "── N file(s) changed ──" row).
+fn diff_lines_window(diff: &Diff, app: &App, start: usize, count: usize) -> Vec<Line<'static>> {
     let theme = &app.theme;
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut lines = Vec::with_capacity(count.min(256));
+    let mut line_no = 0usize;
+    let end = start + count;
 
-    lines.push(Line::raw("".to_string()));
-    lines.push(Line::from(Span::styled(
-        format!("── {} file(s) changed ──", diff.files.len()),
-        Style::default().fg(theme.hunk).add_modifier(Modifier::BOLD),
-    )));
-
-    for file in &diff.files {
+    // Summary header (1 line).
+    if line_no >= start && line_no < end {
         lines.push(Line::raw("".to_string()));
         lines.push(Line::from(Span::styled(
-            format!("─── {} ", file.new_path),
+            format!("── {} file(s) changed ──", diff.files.len()),
             Style::default().fg(theme.hunk).add_modifier(Modifier::BOLD),
         )));
+    }
+    line_no += 2; // blank + summary
+
+    for file in &diff.files {
+        // Blank + file header (2 lines).
+        if line_no >= start && line_no < end {
+            lines.push(Line::raw("".to_string()));
+        }
+        line_no += 1;
+        if line_no >= start && line_no < end {
+            lines.push(Line::from(Span::styled(
+                format!("─── {} ", file.new_path),
+                Style::default().fg(theme.hunk).add_modifier(Modifier::BOLD),
+            )));
+        }
+        line_no += 1;
 
         if file.is_binary {
-            lines.push(Line::from(Span::styled(
-                "  (binary file)".to_string(),
-                Style::default().fg(theme.dim),
-            )));
+            if line_no >= start && line_no < end {
+                lines.push(Line::from(Span::styled(
+                    "  (binary file)".to_string(),
+                    Style::default().fg(theme.dim),
+                )));
+            }
+            line_no += 1;
             continue;
         }
 
         for hunk in &file.hunks {
-            lines.push(Line::from(Span::styled(
-                hunk.header.clone(),
-                Style::default().fg(theme.hunk),
-            )));
+            if line_no >= start && line_no < end {
+                lines.push(Line::from(Span::styled(
+                    hunk.header.clone(),
+                    Style::default().fg(theme.hunk),
+                )));
+            }
+            line_no += 1;
+
             for dl in &hunk.lines {
-                let styled = match dl.kind {
-                    DiffLineKind::Added => Some((format!("+{}", dl.text), theme.added)),
-                    DiffLineKind::Removed => Some((format!("-{}", dl.text), theme.removed)),
-                    DiffLineKind::Context => Some((format!(" {}", dl.text), theme.fg)),
-                    DiffLineKind::Meta => Some((dl.text.clone(), theme.dim)),
-                    // @@ header already rendered via hunk.header.
-                    DiffLineKind::Header => None,
-                };
-                if let Some((text, color)) = styled {
-                    lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+                if line_no >= start && line_no < end {
+                    let styled = match dl.kind {
+                        DiffLineKind::Added => Some((format!("+{}", dl.text), theme.added)),
+                        DiffLineKind::Removed => Some((format!("-{}", dl.text), theme.removed)),
+                        DiffLineKind::Context => Some((format!(" {}", dl.text), theme.fg)),
+                        DiffLineKind::Meta => Some((dl.text.clone(), theme.dim)),
+                        // @@ header already rendered via hunk.header.
+                        DiffLineKind::Header => None,
+                    };
+                    if let Some((text, color)) = styled {
+                        lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+                    }
                 }
+                line_no += 1;
+            }
+            if line_no >= end {
+                return lines;
             }
         }
     }

@@ -23,7 +23,7 @@ pub struct MockBackend {
     pub op_in_progress: Option<OpInProgress>,
     pub last_commit_message: String,
     /// Recorded calls for assertion in tests.
-    pub calls: std::sync::Mutex<Vec<String>>,
+    pub calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl MockBackend {
@@ -72,7 +72,8 @@ impl GitBackend for MockBackend {
         Ok(self.commits.clone())
     }
 
-    fn diff_between(&self, _base: &str, _target: &str) -> anyhow::Result<Diff> {
+    fn diff_between(&self, base: &str, target: &str) -> anyhow::Result<Diff> {
+        self.record(format!("diff_between {base} {target}"));
         Ok(Diff::default())
     }
 
@@ -84,7 +85,8 @@ impl GitBackend for MockBackend {
             .ok_or_else(|| anyhow::anyhow!("mock: commit {rev} not found"))
     }
 
-    fn commit_diff(&self, _oid: &str) -> anyhow::Result<Diff> {
+    fn commit_diff(&self, oid: &str) -> anyhow::Result<Diff> {
+        self.record(format!("commit_diff {oid}"));
         Ok(Diff::default())
     }
 
@@ -339,5 +341,14 @@ pub fn mk_branch(name: &str, target: &str) -> Branch {
         behind: 0,
         is_head: false,
         target: target.into(),
+    }
+}
+
+/// Build a stash with the given index and message.
+pub fn mk_stash(index: usize, message: &str) -> Stash {
+    Stash {
+        index,
+        message: message.into(),
+        oid: "deadbeef".into(),
     }
 }

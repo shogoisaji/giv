@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::Context;
@@ -29,10 +30,9 @@ pub enum Mode {
 
 /// Which panel currently holds keyboard focus.
 ///
-/// `Left` and `Main` are the two panes of the historical two-pane layout
-/// (Left = list, Main = detail/diff). `Middle` and `Right` only appear in the
-/// wide three-pane dashboard (`Graph | Changes | Diff`): Left = Graph,
-/// Middle = Changes, Right = Diff.
+/// `Left` and `Main` are the two panes of the selected tab's two-pane layout
+/// (Left = list, Main = detail/diff). `Middle` and `Right` are retained for the
+/// legacy three-pane layout helpers but are not selected by the current policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Left,
@@ -89,15 +89,30 @@ pub struct UiState {
     pub graph_offset: usize,
     /// Selected index in the branches list.
     pub branch_index: usize,
+    /// Scroll offset for the branches list (mouse-wheel view scroll).
+    pub branch_offset: usize,
+    /// Number of visible rows in the branches panel, recorded by the renderer
+    /// each frame so navigation can auto-scroll to keep the selection visible.
+    pub branch_viewport: Cell<usize>,
     /// Selected index in the worktrees list.
     pub worktree_index: usize,
+    /// Scroll offset for the worktrees list (mouse-wheel view scroll).
+    pub worktree_offset: usize,
+    /// Number of visible rows in the worktrees panel, recorded by the renderer
+    /// each frame so navigation can auto-scroll to keep the selection visible.
+    pub worktree_viewport: Cell<usize>,
     /// Selected index in the stashes list.
     pub stash_index: usize,
+    /// Scroll offset for the stashes list (mouse-wheel view scroll).
+    pub stash_offset: usize,
+    /// Number of visible rows in the stashes panel, recorded by the renderer
+    /// each frame so navigation can auto-scroll to keep the selection visible.
+    pub stash_viewport: Cell<usize>,
     /// Number of visible rows in the graph panel, recorded by the renderer each
     /// frame so navigation can auto-scroll to keep the selected commit visible.
     pub graph_viewport: Cell<usize>,
-    /// Terminal width (columns) recorded by the renderer each frame. Drives the
-    /// responsive layout decision (two-pane vs three-pane dashboard).
+    /// Terminal width (columns) recorded by the renderer each frame for layout
+    /// policy decisions.
     pub width: Cell<u16>,
     /// Width (percent) of the left graph panel in Graph mode. Adjustable with
     /// `<` / `>`. Clamped to [30, 80].
@@ -140,11 +155,11 @@ pub struct TabStrip {
 /// were actually rendered in the last frame are `Some`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PanelRects {
-    /// Changes list (Status mode, or the three-pane dashboard's top-left).
+    /// Changes list in Status mode.
     pub changes: Option<ratatui::layout::Rect>,
-    /// Graph list (Graph mode, or the three-pane dashboard's bottom-left).
+    /// Graph list in Graph mode.
     pub graph: Option<ratatui::layout::Rect>,
-    /// Diff panel (right side in both two-pane and three-pane layouts).
+    /// Diff panel in modes that show one.
     pub diff: Option<ratatui::layout::Rect>,
     /// Generic list panel for Branches / Worktrees / Stashes modes.
     pub other: Option<ratatui::layout::Rect>,
@@ -155,9 +170,9 @@ impl UiState {
         self.focus.as_ref().unwrap_or(&Panel::Left)
     }
 
-    /// The responsive pane structure for the currently-recorded terminal width
-    /// and the given mode. The width is recorded by the renderer each frame
-    /// (`UiState::width`); before the first frame it is `0` (narrow).
+    /// The pane structure for the currently-recorded terminal width and the
+    /// given mode. The width is recorded by the renderer each frame
+    /// (`UiState::width`); before the first frame it is `0`.
     pub fn pane_layout(&self, mode: Mode) -> crate::ui::layout::PaneLayout {
         crate::ui::layout::pane_layout(self.width.get(), mode)
     }
@@ -209,6 +224,7 @@ pub struct GraphCache {
     /// Cache key: `(commit_count, newest_commit_id, spacious, first_parent, main_tip, head_tip)`.
     pub key: Option<(usize, String, bool, bool, String, String)>,
     pub rows: Vec<crate::features::graph::layout::GraphRow>,
+    pub lane_layout: Option<crate::features::graph::layout::LaneLayout>,
 
     // ── Selection-derived caches (recomputed only when their key changes) ─────
     /// Branch-highlight cache. Key adds `graph_index` to the row key's
@@ -228,12 +244,21 @@ pub struct GraphCache {
 
 // ─── RepoState ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffKey {
+    Commit(String),
+    Compare(String, String),
+}
+
 /// Live data fetched from the git backend.
 pub struct RepoState {
     pub backend: Box<dyn GitBackend>,
     pub status: WorkingStatus,
     pub commits: Vec<Commit>,
     pub selected_diff: Option<Diff>,
+    pub selected_diff_key: Option<DiffKey>,
+    pub commit_diff_cache: HashMap<String, Diff>,
+    pub commit_diff_order: VecDeque<String>,
 }
 
 // ─── App (Model) ─────────────────────────────────────────────────────────────
@@ -309,6 +334,8 @@ pub struct App {
     /// commits and the diff panel shows `git diff base...target`. `Esc` clears
     /// this back to the normal scope.
     pub compare: Option<(String, String)>,
+
+    pub pending_graph_diff: Option<String>,
 }
 
 impl App {
@@ -334,6 +361,9 @@ impl App {
                 status,
                 commits,
                 selected_diff: None,
+                selected_diff_key: None,
+                commit_diff_cache: HashMap::new(),
+                commit_diff_order: VecDeque::new(),
             },
             ui: UiState {
                 focus: Some(Panel::Left),
@@ -373,6 +403,7 @@ impl App {
             // selection (click-drag to copy).
             mouse_capture: true,
             compare: None,
+            pending_graph_diff: None,
         };
 
         // Best-effort initial load — failures become status messages.
@@ -484,6 +515,13 @@ impl App {
             }
         }
 
+        // Drop cached commit diffs. SHAs are immutable so cached entries are
+        // still *correct* after a refresh, but the commit set may have changed
+        // (branch lens / compare / fetch) and we don't want stale entries from
+        // a no-longer-visible history to occupy the LRU / byte budget.
+        self.repo.commit_diff_cache.clear();
+        self.repo.commit_diff_order.clear();
+
         Ok(())
     }
 }
@@ -543,6 +581,28 @@ mod tests {
         ];
         let app = build_app(b);
         assert_eq!(app.head_commit_index(), Some(1));
+    }
+
+    // ── refresh clears commit-diff cache ──────────────────────────────────────
+
+    #[test]
+    fn refresh_clears_commit_diff_cache() {
+        use crate::features::graph::update::insert_commit_diff_cache;
+        use crate::git::Diff;
+
+        let mut b = MockBackend::new();
+        b.commits = vec![mk_commit("aaa", "head", true)];
+        let mut app = build_app(b);
+        // Seed the cache with a couple of entries.
+        insert_commit_diff_cache(&mut app, "aaa".into(), Diff::default());
+        insert_commit_diff_cache(&mut app, "bbb".into(), Diff::default());
+        assert_eq!(app.repo.commit_diff_cache.len(), 2);
+        assert_eq!(app.repo.commit_diff_order.len(), 2);
+
+        app.refresh().expect("refresh succeeds");
+
+        assert!(app.repo.commit_diff_cache.is_empty());
+        assert!(app.repo.commit_diff_order.is_empty());
     }
 
     // ── detect_main_branch ───────────────────────────────────────────────────
@@ -642,11 +702,11 @@ mod tests {
     }
 
     #[test]
-    fn uistate_pane_layout_for_graph_wide_is_three_pane() {
+    fn uistate_pane_layout_for_graph_wide_is_two_pane() {
         let ui = UiState::default();
         ui.width.set(200);
         let layout = ui.pane_layout(Mode::Graph);
-        assert_eq!(layout, PaneLayout::ThreePane);
+        assert_eq!(layout, PaneLayout::TwoPane);
     }
 
     #[test]

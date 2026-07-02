@@ -1,8 +1,11 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 
@@ -42,6 +45,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let inner = block.inner(list_area);
     frame.render_widget(block, list_area);
+
+    // Record the visible height so navigation can auto-scroll to follow the
+    // cursor (mirrors `list_viewport` / `graph_viewport`).
+    app.ui.worktree_viewport.set(inner.height as usize);
 
     // ── Empty state ───────────────────────────────────────────────────────────
     if app.worktrees.is_empty() {
@@ -180,8 +187,35 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let list = List::new(items).style(Style::default().bg(theme.bg));
+    // Scroll the rendered rows so the selection stays on-screen. `worktree_offset`
+    // is maintained by `clamp_worktree_offset` after every selection change and by
+    // the mouse-wheel view-scroll; the `.min` here is a defensive bound in case
+    // the list shrank since.
+    let total_rows = items.len();
+    let offset = app.ui.worktree_offset.min(total_rows.saturating_sub(1));
+    let visible: Vec<ListItem> = items.into_iter().skip(offset).collect();
+
+    let list = List::new(visible).style(Style::default().bg(theme.bg));
     frame.render_widget(list, inner);
+
+    // Scrollbar on the right edge when the list overflows the viewport.
+    if total_rows > inner.height as usize {
+        let mut sb_state = ScrollbarState::new(total_rows).position(offset);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
+            .style(Style::default().fg(theme.dim));
+        frame.render_stateful_widget(
+            scrollbar,
+            list_area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut sb_state,
+        );
+    }
 
     // ── Footer hint ───────────────────────────────────────────────────────────
     render_footer(frame, footer_area, app);

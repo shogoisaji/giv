@@ -15,6 +15,7 @@ use crate::app::{App, ConfirmOp, Dialog, Mode, PaletteState, SearchState};
 use crate::clipboard::osc52_copy;
 use crate::effect::Effect;
 use crate::features::branches::update as branches;
+use crate::features::branches::view as branches_view;
 use crate::features::graph::update as graph;
 use crate::features::inspect::update as inspect;
 use crate::features::stashes::update as stashes;
@@ -61,8 +62,13 @@ pub fn update(app: &mut App, action: Action) -> Effect {
             // Reset per-mode cursor to avoid stale positions.
             app.ui.list_index = 0;
             app.ui.list_offset = 0;
+            app.ui.branch_offset = 0;
+            app.ui.worktree_offset = 0;
+            app.ui.stash_offset = 0;
             app.ui.diff_scroll = 0;
             app.repo.selected_diff = None;
+            app.repo.selected_diff_key = None;
+            app.pending_graph_diff = None;
             // Focus the new mode's primary list panel for the active layout
             // (e.g. Changes in 3-pane Status, Graph in 3-pane Graph, Left list
             // in every two-pane mode). Coerce guards against a stale focus from
@@ -162,10 +168,13 @@ pub fn update(app: &mut App, action: Action) -> Effect {
             match target {
                 crate::ui::layout::FocusTarget::Graph => {
                     let max = app.repo.commits.len().saturating_sub(1);
-                    app.ui.graph_index = row.min(max);
+                    let step = app.config.graph_row_step();
+                    let display_row = app.ui.graph_offset + row;
+                    app.ui.graph_index = (display_row / step).min(max);
                     // Keep scroll offset in sync.
-                    if app.ui.graph_index < app.ui.graph_offset {
-                        app.ui.graph_offset = app.ui.graph_index;
+                    let selected_row = app.ui.graph_index * step;
+                    if selected_row < app.ui.graph_offset {
+                        app.ui.graph_offset = selected_row;
                     }
                 }
                 crate::ui::layout::FocusTarget::Changes => {
@@ -180,16 +189,21 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 }
                 crate::ui::layout::FocusTarget::Other => match app.mode {
                     Mode::Branches => {
-                        let max = app.branches.len().saturating_sub(1);
-                        app.ui.branch_index = row.min(max);
+                        // The Branches list interleaves group headers / placeholders
+                        // with selectable rows, and the click `row` is relative to
+                        // the visible viewport — add the scroll offset and convert
+                        // the display row back to a logical branch/tag index.
+                        let display_row = row + app.ui.branch_offset;
+                        app.ui.branch_index =
+                            branches_view::branch_display_row_to_logical(app, display_row);
                     }
                     Mode::Worktrees => {
                         let max = app.worktrees.len().saturating_sub(1);
-                        app.ui.worktree_index = row.min(max);
+                        app.ui.worktree_index = (row + app.ui.worktree_offset).min(max);
                     }
                     Mode::Stashes => {
                         let max = app.stashes.len().saturating_sub(1);
-                        app.ui.stash_index = row.min(max);
+                        app.ui.stash_index = (row + app.ui.stash_offset).min(max);
                     }
                     _ => {}
                 },
@@ -209,7 +223,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 app.ui.diff_scroll = app.ui.diff_scroll.saturating_sub(1);
             } else {
                 move_focused_list(app, -1);
-                reload_selected_diff(app);
+                reload_or_defer_navigation_diff(app);
             }
             Effect::Refresh
         }
@@ -219,7 +233,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 app.ui.diff_scroll = app.ui.diff_scroll.saturating_add(1);
             } else {
                 move_focused_list(app, 1);
-                reload_selected_diff(app);
+                reload_or_defer_navigation_diff(app);
             }
             Effect::Refresh
         }
@@ -229,7 +243,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 app.ui.diff_scroll = 0;
             } else {
                 jump_focused_list(app, true);
-                reload_selected_diff(app);
+                reload_or_defer_navigation_diff(app);
             }
             Effect::Refresh
         }
@@ -239,7 +253,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 // No reliable content height here; leave the diff scroll as-is.
             } else {
                 jump_focused_list(app, false);
-                reload_selected_diff(app);
+                reload_or_defer_navigation_diff(app);
             }
             Effect::Refresh
         }
@@ -250,7 +264,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 return Effect::Refresh;
             }
             move_focused_list(app, -10);
-            reload_selected_diff(app);
+            reload_or_defer_navigation_diff(app);
             Effect::Refresh
         }
 
@@ -260,7 +274,7 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 return Effect::Refresh;
             }
             move_focused_list(app, 10);
-            reload_selected_diff(app);
+            reload_or_defer_navigation_diff(app);
             Effect::Refresh
         }
 
@@ -271,15 +285,55 @@ pub fn update(app: &mut App, action: Action) -> Effect {
             Effect::Refresh
         }
 
+        Action::LoadPendingGraphDiff => {
+            let pending = app.pending_graph_diff.clone();
+            let selected = app
+                .repo
+                .commits
+                .get(app.ui.graph_index)
+                .map(|c| c.id.as_str());
+            if pending.as_deref().is_some() && pending.as_deref() == selected {
+                app.ui.diff_scroll = 0;
+                reload_selected_diff(app);
+                Effect::Refresh
+            } else {
+                app.pending_graph_diff = None;
+                Effect::None
+            }
+        }
+
         // ── Diff scroll ──────────────────────────────────────────────────────
         Action::ScrollDiffUp => {
+            let prev = app.ui.diff_scroll;
             app.ui.diff_scroll = app.ui.diff_scroll.saturating_sub(WHEEL_SCROLL_LINES as u16);
-            Effect::Refresh
+            if app.ui.diff_scroll == prev {
+                Effect::None
+            } else {
+                Effect::Refresh
+            }
         }
 
         Action::ScrollDiffDown => {
-            app.ui.diff_scroll = app.ui.diff_scroll.saturating_add(WHEEL_SCROLL_LINES as u16);
-            Effect::Refresh
+            let prev = app.ui.diff_scroll;
+            // Clamp at the diff's total render line count so scrolling past
+            // the last row is a no-op (no infinite render loop on momentum
+            // scroll).  When no diff is loaded, leave the scroll unchanged.
+            let max = app
+                .repo
+                .selected_diff
+                .as_ref()
+                .map(|d| d.total_render_lines())
+                .unwrap_or(0) as u16;
+            app.ui.diff_scroll = app
+                .ui
+                .diff_scroll
+                .saturating_add(WHEEL_SCROLL_LINES as u16)
+                .min(max);
+            if app.ui.diff_scroll == prev {
+                Effect::None
+            } else {
+                Effect::Refresh
+            }
         }
 
         Action::AdjustGraphSplit(delta) => {
@@ -294,14 +348,78 @@ pub fn update(app: &mut App, action: Action) -> Effect {
         }
 
         Action::ScrollGraphDown => {
-            // Don't scroll past the last graph row.
+            // Don't scroll past the last page: cap at `total - viewport` so the
+            // final scroll position shows the last pageful, matching
+            // `clamp_graph_offset`'s `row + 1 - viewport` math.
             let total_rows = app
                 .repo
                 .commits
                 .len()
                 .saturating_mul(app.config.graph_row_step());
-            let max_offset = total_rows.saturating_sub(1);
+            let max_offset = view_scroll_max(total_rows, app.ui.graph_viewport.get());
             app.ui.graph_offset = (app.ui.graph_offset + WHEEL_SCROLL_LINES).min(max_offset);
+            Effect::Refresh
+        }
+
+        // ── List view-scroll (mouse wheel) ───────────────────────────────────
+        //
+        // Scrolls the focused non-graph list VIEW (offset) without moving the
+        // selection, mirroring `ScrollGraphUp`/`ScrollGraphDown` for the Status
+        // / Branches / Worktrees / Stashes panels. The keyboard ↑/↓ still moves
+        // the selection (with auto-scroll via `clamp_*_offset`).
+        Action::ScrollListUp => {
+            match current_focus_target(app) {
+                crate::ui::layout::FocusTarget::Changes => {
+                    app.ui.list_offset = app.ui.list_offset.saturating_sub(WHEEL_SCROLL_LINES);
+                }
+                crate::ui::layout::FocusTarget::Other => match app.mode {
+                    Mode::Branches => {
+                        app.ui.branch_offset =
+                            app.ui.branch_offset.saturating_sub(WHEEL_SCROLL_LINES);
+                    }
+                    Mode::Worktrees => {
+                        app.ui.worktree_offset =
+                            app.ui.worktree_offset.saturating_sub(WHEEL_SCROLL_LINES);
+                    }
+                    Mode::Stashes => {
+                        app.ui.stash_offset =
+                            app.ui.stash_offset.saturating_sub(WHEEL_SCROLL_LINES);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+            Effect::Refresh
+        }
+
+        Action::ScrollListDown => {
+            match current_focus_target(app) {
+                crate::ui::layout::FocusTarget::Changes => {
+                    let total = status_view::status_total_display_rows(app);
+                    let max = view_scroll_max(total, app.ui.list_viewport.get());
+                    app.ui.list_offset = (app.ui.list_offset + WHEEL_SCROLL_LINES).min(max);
+                }
+                crate::ui::layout::FocusTarget::Other => match app.mode {
+                    Mode::Branches => {
+                        let total = branches_view::branch_total_rows(app);
+                        let max = view_scroll_max(total, app.ui.branch_viewport.get());
+                        app.ui.branch_offset = (app.ui.branch_offset + WHEEL_SCROLL_LINES).min(max);
+                    }
+                    Mode::Worktrees => {
+                        let total = app.worktrees.len();
+                        let max = view_scroll_max(total, app.ui.worktree_viewport.get());
+                        app.ui.worktree_offset =
+                            (app.ui.worktree_offset + WHEEL_SCROLL_LINES).min(max);
+                    }
+                    Mode::Stashes => {
+                        let total = app.stashes.len();
+                        let max = view_scroll_max(total, app.ui.stash_viewport.get());
+                        app.ui.stash_offset = (app.ui.stash_offset + WHEEL_SCROLL_LINES).min(max);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
             Effect::Refresh
         }
 
@@ -1134,8 +1252,7 @@ pub(crate) fn check_op_in_progress(app: &mut App) {
     }
 }
 
-/// The responsive pane layout for the currently-recorded terminal width and
-/// the active mode.
+/// The pane layout for the currently-recorded terminal width and the active mode.
 fn current_layout(app: &App) -> crate::ui::layout::PaneLayout {
     app.ui.pane_layout(app.mode)
 }
@@ -1147,8 +1264,8 @@ fn current_focus_target(app: &App) -> crate::ui::layout::FocusTarget {
 
 /// Move the focused list's cursor by `delta` rows (negative = up), clamped to
 /// `[0, len-1]`. Dispatches on the focused panel's semantic target so the same
-/// key does the right thing in both two-pane and three-pane layouts. The diff
-/// target is a no-op here (movement scrolls the diff at the call site).
+/// key does the right thing in each mode. The diff target is a no-op here
+/// (movement scrolls the diff at the call site).
 fn move_focused_list(app: &mut App, delta: i64) {
     match current_focus_target(app) {
         crate::ui::layout::FocusTarget::Graph => {
@@ -1270,16 +1387,49 @@ fn clamp_cursors(app: &mut App) {
     app.ui.stash_index = app.ui.stash_index.min(app.stashes.len().saturating_sub(1));
 }
 
+/// Upper bound for a list view-scroll offset so the last *page* (not the last
+/// single row) is the final scroll position — matching `clamp_*_offset`'s
+/// `row + 1 - viewport` math, so manual wheel-scroll and selection-follow
+/// auto-scroll agree on the same range and don't jump. When the viewport
+/// height is unknown (0, before the first frame renders), fall back to
+/// `total - 1` so scrolling still reaches the bottom.
+fn view_scroll_max(total: usize, viewport: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    if viewport == 0 {
+        total.saturating_sub(1)
+    } else {
+        total.saturating_sub(viewport)
+    }
+}
+
+fn reload_or_defer_navigation_diff(app: &mut App) {
+    match current_focus_target(app) {
+        crate::ui::layout::FocusTarget::Graph if app.compare.is_none() => {
+            clamp_cursors(app);
+            app.ui.diff_scroll = 0;
+            graph::clamp_graph_offset(app);
+            app.pending_graph_diff = app
+                .repo
+                .commits
+                .get(app.ui.graph_index)
+                .map(|c| c.id.clone());
+        }
+        _ => reload_selected_diff(app),
+    }
+}
+
 /// Reload the diff for whatever is currently selected, dispatching to the
 /// focused panel's loader. The diff scroll is reset to the top because the
 /// content just changed. Called from almost every mutating operation across the
 /// feature modules, so it is `pub(crate)`.
 ///
-/// Dispatch is by focused semantic target (not raw mode) so the three-pane
-/// dashboard's diff pane always reflects the panel the user is navigating:
-/// the graph commit diff when the graph is focused, the working-tree file diff
-/// when the change list is focused. The `Diff` target is a no-op (the diff is
-/// being viewed, not driven by a list selection).
+/// Dispatch is by focused semantic target (not raw mode) so the diff reflects
+/// the panel the user is navigating: the graph commit diff when the graph is
+/// focused, the working-tree file diff when the change list is focused. The
+/// `Diff` target is a no-op (the diff is being viewed, not driven by a list
+/// selection).
 pub(crate) fn reload_selected_diff(app: &mut App) {
     clamp_cursors(app);
     app.ui.diff_scroll = 0;
@@ -1293,11 +1443,15 @@ pub(crate) fn reload_selected_diff(app: &mut App) {
             status::load_status_diff(app);
         }
         crate::ui::layout::FocusTarget::Diff => {}
-        crate::ui::layout::FocusTarget::Other => {
-            if matches!(app.mode, Mode::Stashes) {
+        crate::ui::layout::FocusTarget::Other => match app.mode {
+            Mode::Branches => branches::clamp_branch_offset(app),
+            Mode::Worktrees => worktrees::clamp_worktree_offset(app),
+            Mode::Stashes => {
+                stashes::clamp_stash_offset(app);
                 stashes::load_stash_diff(app);
             }
-        }
+            _ => {}
+        },
     }
 }
 
@@ -1312,6 +1466,15 @@ mod tests {
 
     fn build_app(backend: MockBackend) -> App {
         App::new(Box::new(backend), Config::default()).expect("app builds")
+    }
+
+    fn call_count(calls: &std::sync::Arc<std::sync::Mutex<Vec<String>>>, prefix: &str) -> usize {
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.starts_with(prefix))
+            .count()
     }
 
     // ── confirm_task variants ────────────────────────────────────────────────
@@ -1485,15 +1648,12 @@ mod tests {
     }
 
     #[test]
-    fn current_layout_graph_wide_is_three_pane() {
+    fn current_layout_graph_wide_is_two_pane() {
         let b = MockBackend::new();
         let mut app = build_app(b);
         app.mode = Mode::Graph;
         app.ui.width.set(200);
-        assert_eq!(
-            current_layout(&app),
-            crate::ui::layout::PaneLayout::ThreePane
-        );
+        assert_eq!(current_layout(&app), crate::ui::layout::PaneLayout::TwoPane);
     }
 
     #[test]
@@ -1518,6 +1678,98 @@ mod tests {
             current_focus_target(&app),
             crate::ui::layout::FocusTarget::Graph
         );
+    }
+
+    #[test]
+    fn graph_navigation_in_compare_mode_reuses_loaded_compare_diff() {
+        let mut b = MockBackend::new();
+        b.commits = vec![
+            mk_commit("newer", "newer", false),
+            mk_commit("older", "older", false),
+        ];
+        let calls = b.calls.clone();
+        let mut app = build_app(b);
+        app.mode = Mode::Graph;
+        app.ui.focus = Some(Panel::Left);
+        app.compare = Some(("main".into(), "feature".into()));
+
+        update(&mut app, Action::Select);
+        assert_eq!(call_count(&calls, "diff_between"), 1);
+
+        update(&mut app, Action::Down);
+
+        assert_eq!(app.ui.graph_index, 1);
+        assert_eq!(call_count(&calls, "diff_between"), 1);
+    }
+
+    #[test]
+    fn graph_select_reuses_cached_commit_diff_when_returning_to_commit() {
+        let mut b = MockBackend::new();
+        b.commits = vec![
+            mk_commit("newer", "newer", false),
+            mk_commit("older", "older", false),
+        ];
+        let calls = b.calls.clone();
+        let mut app = build_app(b);
+        app.mode = Mode::Graph;
+        app.ui.focus = Some(Panel::Left);
+
+        update(&mut app, Action::Select);
+        app.ui.graph_index = 1;
+        update(&mut app, Action::Select);
+        app.ui.graph_index = 0;
+        update(&mut app, Action::Select);
+
+        assert_eq!(call_count(&calls, "commit_diff"), 2);
+    }
+
+    #[test]
+    fn graph_navigation_defers_commit_diff_loading() {
+        let mut b = MockBackend::new();
+        b.commits = vec![
+            mk_commit("newer", "newer", false),
+            mk_commit("older", "older", false),
+        ];
+        let calls = b.calls.clone();
+        let mut app = build_app(b);
+        app.mode = Mode::Graph;
+        app.ui.focus = Some(Panel::Left);
+        calls.lock().unwrap().clear();
+
+        update(&mut app, Action::Down);
+
+        assert_eq!(app.ui.graph_index, 1);
+        assert_eq!(call_count(&calls, "commit_diff"), 0);
+    }
+
+    #[test]
+    fn flushing_pending_graph_diff_loads_only_latest_selection() {
+        let mut b = MockBackend::new();
+        b.commits = vec![
+            mk_commit("newest", "newest", false),
+            mk_commit("middle", "middle", false),
+            mk_commit("oldest", "oldest", false),
+        ];
+        let calls = b.calls.clone();
+        let mut app = build_app(b);
+        app.mode = Mode::Graph;
+        app.ui.focus = Some(Panel::Left);
+        calls.lock().unwrap().clear();
+
+        update(&mut app, Action::Down);
+        update(&mut app, Action::Down);
+        update(&mut app, Action::LoadPendingGraphDiff);
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|c| c.starts_with("commit_diff"))
+                .count(),
+            1
+        );
+        assert!(calls.iter().any(|c| c == "commit_diff oldest"));
+        assert!(!calls.iter().any(|c| c == "commit_diff middle"));
     }
 
     // ── clamp_cursors ────────────────────────────────────────────────────────
@@ -1616,5 +1868,158 @@ mod tests {
         app.mode = Mode::Graph;
         check_op_in_progress(&mut app);
         assert_eq!(app.mode, Mode::Graph);
+    }
+
+    // ── view-scroll upper bound (total - viewport) ────────────────────────────
+
+    fn build_stash_app(n: usize) -> App {
+        let mut b = MockBackend::new();
+        b.stashes = (0..n)
+            .map(|i| crate::test_backend::mk_stash(i, &format!("s{i}")))
+            .collect();
+        build_app(b)
+    }
+
+    #[test]
+    fn scroll_list_down_stops_at_total_minus_viewport() {
+        // 10 stashes, viewport 5 → max offset = 10 - 5 = 5. WHEEL_SCROLL_LINES
+        // is 3, so two scrolls (0→3→5) reach the cap and a third stays at 5.
+        let mut app = build_stash_app(10);
+        app.mode = Mode::Stashes;
+        app.ui.focus = Some(Panel::Left);
+        app.ui.stash_viewport.set(5);
+
+        update(&mut app, Action::ScrollListDown);
+        assert_eq!(app.ui.stash_offset, 3);
+        update(&mut app, Action::ScrollListDown);
+        assert_eq!(app.ui.stash_offset, 5);
+        update(&mut app, Action::ScrollListDown);
+        assert_eq!(
+            app.ui.stash_offset, 5,
+            "must not scroll past total-viewport"
+        );
+    }
+
+    #[test]
+    fn scroll_list_down_falls_back_to_total_minus_1_when_viewport_unknown() {
+        // viewport 0 (before first frame) → fall back to total-1 so the last
+        // row is still reachable.
+        let mut app = build_stash_app(10);
+        app.mode = Mode::Stashes;
+        app.ui.focus = Some(Panel::Left);
+        // stash_viewport left at default 0.
+
+        for _ in 0..10 {
+            update(&mut app, Action::ScrollListDown);
+        }
+        assert_eq!(app.ui.stash_offset, 9);
+    }
+
+    #[test]
+    fn scroll_graph_down_stops_at_total_minus_viewport() {
+        // 10 commits, step 1 → 10 rows. viewport 5 → max offset = 5.
+        let mut b = MockBackend::new();
+        b.commits = (0..10)
+            .map(|i| mk_commit(&format!("c{i}"), &format!("c{i}"), false))
+            .collect();
+        let mut app = build_app(b);
+        app.mode = Mode::Graph;
+        app.ui.focus = Some(Panel::Left);
+        app.ui.graph_viewport.set(5);
+
+        for _ in 0..5 {
+            update(&mut app, Action::ScrollGraphDown);
+        }
+        assert_eq!(app.ui.graph_offset, 5);
+        update(&mut app, Action::ScrollGraphDown);
+        assert_eq!(
+            app.ui.graph_offset, 5,
+            "must not scroll past total-viewport"
+        );
+    }
+
+    // ── diff_scroll clamping ───────────────────────────────────────────────
+
+    use crate::git::types::{Diff, DiffLine, DiffLineKind, FileDiff, Hunk};
+
+    fn build_diff_app_with(diff: Diff) -> App {
+        let mut b = MockBackend::new();
+        b.commits = vec![mk_commit("c0", "c0", false)];
+        let mut app = build_app(b);
+        app.repo.selected_diff = Some(diff);
+        app
+    }
+
+    fn small_diff() -> Diff {
+        // 1 file header + 1 hunk header + 5 body + 1 blank = 8 render rows.
+        Diff {
+            files: vec![FileDiff {
+                old_path: "a".into(),
+                new_path: "a".into(),
+                is_binary: false,
+                hunks: vec![Hunk {
+                    header: "@@ -1,1 +1,5 @@".into(),
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 5,
+                    lines: (0..5)
+                        .map(|i| DiffLine {
+                            kind: DiffLineKind::Added,
+                            text: format!("line {i}"),
+                        })
+                        .collect(),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn scroll_diff_down_clamps_at_total_render_lines() {
+        // total_render_lines = 8. WHEEL_SCROLL_LINES = 3.
+        // 0 → 3 → 6 → 8 (clamped from 9) → 8 (no-op).
+        let mut app = build_diff_app_with(small_diff());
+        update(&mut app, Action::ScrollDiffDown);
+        assert_eq!(app.ui.diff_scroll, 3);
+        update(&mut app, Action::ScrollDiffDown);
+        assert_eq!(app.ui.diff_scroll, 6);
+        update(&mut app, Action::ScrollDiffDown);
+        assert_eq!(app.ui.diff_scroll, 8, "must clamp at total_render_lines");
+        update(&mut app, Action::ScrollDiffDown);
+        assert_eq!(app.ui.diff_scroll, 8, "must not scroll past the diff end");
+    }
+
+    #[test]
+    fn scroll_diff_down_returns_none_at_end() {
+        // Once clamped, further ScrollDiffDown returns Effect::None (no
+        // render trigger) so a momentum-scroll burst can't spin the loop.
+        let mut app = build_diff_app_with(small_diff());
+        // advance to the end
+        for _ in 0..10 {
+            update(&mut app, Action::ScrollDiffDown);
+        }
+        assert_eq!(app.ui.diff_scroll, 8);
+        let effect = update(&mut app, Action::ScrollDiffDown);
+        assert!(matches!(effect, Effect::None), "expected None at end");
+    }
+
+    #[test]
+    fn scroll_diff_up_returns_none_at_zero() {
+        let mut app = build_diff_app_with(small_diff());
+        let effect = update(&mut app, Action::ScrollDiffUp);
+        assert_eq!(app.ui.diff_scroll, 0);
+        assert!(matches!(effect, Effect::None), "expected None at zero");
+    }
+
+    #[test]
+    fn scroll_diff_down_no_diff_does_not_advance() {
+        // Without a loaded diff, max = 0, so scrolling is a no-op.
+        let mut b = MockBackend::new();
+        b.commits = vec![mk_commit("c0", "c0", false)];
+        let mut app = build_app(b);
+        app.repo.selected_diff = None;
+        let effect = update(&mut app, Action::ScrollDiffDown);
+        assert_eq!(app.ui.diff_scroll, 0);
+        assert!(matches!(effect, Effect::None));
     }
 }

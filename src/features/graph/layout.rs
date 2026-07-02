@@ -707,17 +707,25 @@ pub fn branch_highlight_main(
     main_tip: Option<&str>,
     head_tip: Option<&str>,
 ) -> Highlight {
+    let layout = compute_lanes_main(commits, first_parent, main_tip, head_tip);
+    branch_highlight_from_lanes(commits, &layout, selected)
+}
+
+pub fn branch_highlight_from_lanes(
+    commits: &[Commit],
+    layout: &LaneLayout,
+    selected: usize,
+) -> Highlight {
     use std::collections::HashSet;
-    if commits.get(selected).is_none() {
+    if commits.get(selected).is_none() || selected >= layout.lane_of.len() {
         return Highlight::default();
     }
-    let layout = compute_lanes_main(commits, first_parent, main_tip, head_tip);
     let lid = layout.lane_of[selected];
 
     let interior: HashSet<Oid> = commits
         .iter()
         .enumerate()
-        .filter(|(i, _)| layout.lane_of[*i] == lid)
+        .filter(|(i, _)| layout.lane_of.get(*i) == Some(&lid))
         .map(|(_, c)| c.id.clone())
         .collect();
 
@@ -1775,6 +1783,25 @@ mod tests {
             !hm.lanes.contains("feat1"),
             "feature must stay off the main spine"
         );
+    }
+
+    #[test]
+    fn branch_highlight_from_cached_lane_layout_matches_main_highlight() {
+        let commits = vec![
+            mk("feat3", vec!["feat2"], "f3"),
+            mk("feat2", vec!["feat1"], "f2"),
+            mk("feat1", vec!["main1"], "f1"),
+            mk("main3", vec!["main2"], "m3"),
+            mk("main2", vec!["main1"], "m2"),
+            mk("main1", vec!["root"], "m1"),
+            mk("root", vec![], "root"),
+        ];
+        let lanes = compute_lanes_main(&commits, false, Some("main3"), None);
+        let expected = branch_highlight_main(&commits, 1, false, Some("main3"), None);
+        let actual = branch_highlight_from_lanes(&commits, &lanes, 1);
+
+        assert_eq!(actual.nodes, expected.nodes);
+        assert_eq!(actual.lanes, expected.lanes);
     }
 
     /// The current branch (`head_tip`) is pinned to column 1, right beside main —

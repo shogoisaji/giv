@@ -893,12 +893,11 @@ mod smoke {
         assert!(!has(&app, "main-1"));
     }
 
-    /// Wide-terminal three-pane dashboard: at >= 150 cols, Status mode renders
-    /// the Graph, Changes, and Diff panes side by side. The render must not
-    /// panic and the buffer must contain both the Graph and Changes panel
-    /// titles — proving all three panes were laid out in one frame.
+    /// Wide terminal: Status mode still renders only the selected Status tab's
+    /// two-pane content. The Graph tab label may be visible in the tab strip, but
+    /// the Graph panel itself is not laid out in the main area.
     #[test]
-    fn wide_status_renders_three_pane_dashboard() {
+    fn wide_status_renders_selected_status_tab_only() {
         let tmp = tempdir_with_git_init();
         // A second commit so the graph has content, plus a modified file so the
         // change list has content.
@@ -911,42 +910,28 @@ mod smoke {
         let _ = app.refresh();
         let _ = crate::update::update(&mut app, crate::action::Action::Select);
 
-        // 200 cols triggers the wide three-pane dashboard for Status mode.
         let backend_tb = TestBackend::new(200, 40);
         let mut terminal = Terminal::new(backend_tb).expect("TestBackend terminal");
         terminal
             .draw(|frame| view(frame, &app))
             .expect("draw frame");
 
-        // The layout decision must be ThreePane for Status at 200 cols.
         assert_eq!(
             app.ui.pane_layout(app.mode),
-            crate::ui::layout::PaneLayout::ThreePane
+            crate::ui::layout::PaneLayout::TwoPane
         );
 
-        let buf = terminal.backend().buffer().clone();
-        let rendered: String = buf
-            .content()
-            .iter()
-            .map(|cell| cell.symbol().chars().next().unwrap_or(' '))
-            .collect();
-
+        let rects = app.ui.panel_rects.get();
+        assert!(rects.changes.is_some(), "Status changes pane is rendered");
+        assert!(rects.diff.is_some(), "Status diff pane is rendered");
         assert!(
-            rendered.contains("Graph"),
-            "three-pane dashboard must render the Graph pane title"
-        );
-        assert!(
-            rendered.contains("Changes"),
-            "three-pane dashboard must render the Changes pane title"
-        );
-        assert!(
-            rendered.contains("Diff"),
-            "three-pane dashboard must render the Diff pane title"
+            rects.graph.is_none(),
+            "Graph pane is not rendered in Status"
         );
     }
 
-    /// Narrow terminal: Status mode keeps the historical two-pane layout (no
-    /// Graph pane), proving the responsive switch is width-gated.
+    /// Narrow terminal: Status mode uses the selected Status tab's two-pane
+    /// layout, with no Graph pane in the main area.
     #[test]
     fn narrow_status_keeps_two_pane() {
         let tmp = tempdir_with_git_init();
@@ -965,11 +950,10 @@ mod smoke {
         );
     }
 
-    /// Focus cycling in the three-pane dashboard: Tab cycles Left → Middle →
-    /// Right → Left. Three-pane layout is Left=Changes, Middle=Graph, Right=Diff.
-    /// Status primary = Left (Changes), so initial focus after SwitchMode is Left.
+    /// Focus cycling stays in the selected tab's two-pane layout even on a wide
+    /// terminal: Tab cycles Left → Main → Left.
     #[test]
-    fn focus_next_cycles_three_pane_in_dashboard() {
+    fn focus_next_cycles_two_pane_even_when_wide() {
         use crate::app::Panel;
         let tmp = tempdir_with_git_init();
         git_in(&tmp, &["commit", "--allow-empty", "-m", "second"]);
@@ -979,9 +963,7 @@ mod smoke {
         let mut app = App::new(Box::new(backend), Config::default()).expect("App::new");
         app.mode = crate::app::Mode::Status;
         let _ = app.refresh();
-        // Simulate a wide terminal so the model uses the three-pane layout.
         app.ui.width.set(200);
-        // Initial focus after SwitchMode is the Status primary = Left (Changes).
         let _ = crate::update::update(
             &mut app,
             crate::action::Action::SwitchMode(crate::app::Mode::Status),
@@ -989,11 +971,9 @@ mod smoke {
         assert_eq!(*app.ui.panel(), Panel::Left);
 
         let _ = crate::update::update(&mut app, crate::action::Action::FocusNext);
-        assert_eq!(*app.ui.panel(), Panel::Middle, "Left -> Middle");
+        assert_eq!(*app.ui.panel(), Panel::Main, "Left -> Main");
         let _ = crate::update::update(&mut app, crate::action::Action::FocusNext);
-        assert_eq!(*app.ui.panel(), Panel::Right, "Middle -> Right");
-        let _ = crate::update::update(&mut app, crate::action::Action::FocusNext);
-        assert_eq!(*app.ui.panel(), Panel::Left, "Right -> Left");
+        assert_eq!(*app.ui.panel(), Panel::Left, "Main -> Left");
     }
 
     /// Mouse click on a list row jumps the cursor to that row and focuses the
@@ -1218,6 +1198,40 @@ mod smoke {
         assert_eq!(
             app.ui.list_index, 4,
             "clicking display row 6 (file4) should set list_index to 4"
+        );
+    }
+
+    /// Clicking a visible Graph row after scrolling should select the commit at
+    /// `graph_offset + row`, not the unscrolled viewport row.
+    #[test]
+    fn click_graph_row_accounts_for_scroll_offset() {
+        let tmp = tempdir_with_git_init();
+        for i in 0..25 {
+            git_in(&tmp, &["commit", "--allow-empty", "-m", &format!("c{i}")]);
+        }
+
+        let backend = crate::git::open(&tmp).expect("open temp repo");
+        let mut app = App::new(Box::new(backend), Config::default()).expect("App::new");
+        app.mode = crate::app::Mode::Graph;
+        let _ = app.refresh();
+        app.ui.graph_viewport.set(10);
+        app.ui.graph_offset = 10;
+
+        let _ = crate::update::update(
+            &mut app,
+            crate::action::Action::ClickPanel {
+                panel: Panel::Left,
+                row: 2,
+            },
+        );
+
+        assert_eq!(
+            app.ui.graph_index, 12,
+            "clicking visible row 2 with graph_offset 10 should select commit 12"
+        );
+        assert_eq!(
+            app.ui.graph_offset, 10,
+            "clicking an already visible row should keep the graph scrolled"
         );
     }
 
