@@ -858,7 +858,7 @@ pub fn build_graph_main(
         // entirely — the node still shows `◉` (it keeps both parents in its data)
         // but only the first-parent lane continues, giving a straight trunk.
         let mut branch: Vec<(Oid, usize, usize, bool)> = Vec::new();
-        for (parent, existing) in extra_parents.iter().zip(parent_existing.into_iter()) {
+        for (parent, existing) in extra_parents.iter().zip(parent_existing) {
             if let Some(existing) = existing {
                 // Another lane already heads to this parent — merge into it
                 // rather than open a duplicate column.

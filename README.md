@@ -1,8 +1,6 @@
 # giv
 
-A terminal (TUI) git visualizer written in pure Rust — similar to the VS Code
-"Git Graph" extension but in the terminal. Targets lazygit-level functionality
-with a clean, theme-able interface.
+A terminal (TUI) git visualizer written in pure Rust.
 
 All git operations shell out to the `git` binary; no libgit2 dependency.
 
@@ -11,7 +9,7 @@ All git operations shell out to the `git` binary; no libgit2 dependency.
 Requirements:
 
 - Git available on `PATH`
-- Rust 1.85 or newer when building from source
+- Rust 1.88 or newer when building from source
 
 ### Build from source
 
@@ -33,23 +31,6 @@ cargo install --path .
 
 ```sh
 giv [PATH]            # Launch TUI on the repo at PATH (default: current dir)
-```
-
-### Debug / non-TTY subcommands
-
-These run without a TTY and are useful for CI or scripting:
-
-```sh
-giv debug version                       # Print name + version, exit 0
-giv debug status   [PATH]               # Print parsed working status
-giv debug log      [PATH] [-n N]        # Print recent N commits
-giv debug graph    [PATH] [-n N]        # Print ASCII commit graph
-giv debug diff     [PATH] [--staged] [FILE]  # Print parsed diff
-giv debug branches [PATH]               # Print all branches
-giv debug worktrees [PATH]              # Print all worktrees
-giv debug tags     [PATH]               # Print all tags
-giv debug stashes  [PATH]               # Print all stash entries
-giv debug op-status [PATH]             # Print in-progress operation
 ```
 
 ## Modes
@@ -116,9 +97,6 @@ top of base), and the diff panel shows `git diff base...target` — the cumulati
 changes the target branch introduces. The status bar shows
 `Comparing: base..target (N commits)`. Press `Esc` or `=` again to exit compare
 mode and restore the full graph.
-
-This is the terminal equivalent of opening a PR diff view: see exactly which
-commits and which lines a branch adds, without leaving the terminal.
 
 ### Mouse click-to-jump
 
@@ -287,25 +265,6 @@ graph_mode = "spacious"
 diff_view = "unified"
 ```
 
-## Worktree cd shell wrapper
-
-giv prints the selected worktree path to stdout when you press `Enter` in
-Worktrees mode, allowing a shell wrapper to `cd` into it.
-
-Add this function to your `~/.zshrc` or `~/.bashrc`:
-
-```sh
-giv-cd() {
-    local target
-    target="$(giv "$@")"
-    if [ -n "$target" ] && [ -d "$target" ]; then
-        cd "$target"
-    fi
-}
-```
-
-Then use `giv-cd` instead of `giv` to get automatic directory switching.
-
 ## Architecture
 
 giv follows an Elm-style architecture (model → `update(action)` → `Effect`,
@@ -345,22 +304,6 @@ confirm executor, palette, search) live in `core`.
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SECURITY.md](SECURITY.md)
 - [Homebrew release checklist](docs/homebrew-release.md)
-
-## Homebrew release checks
-
-Before cutting a GitHub release for Homebrew, run:
-
-```sh
-./scripts/release-check.sh
-```
-
-For the Homebrew tap, build from the GitHub release tarball and keep the formula
-test simple, for example `system "#{bin}/giv", "debug", "version"`.
-See [docs/homebrew-release.md](docs/homebrew-release.md) and
-[Formula/giv.rb.template](Formula/giv.rb.template) for the tap update flow.
-Use [scripts/generate-homebrew-formula.sh](scripts/generate-homebrew-formula.sh)
-to fill the formula from the release owner, tag, and tarball SHA-256. Pushing a
-`v*.*.*` tag also starts a draft GitHub Release with `SHA256SUMS`.
 
 ## License
 

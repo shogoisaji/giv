@@ -1554,7 +1554,7 @@ mod smoke {
         std::fs::create_dir_all(&dir).expect("create temp dir");
 
         let output = Command::new("git")
-            .args(["init", "-q"])
+            .args(["init", "-q", "-b", "main"])
             .current_dir(&dir)
             .output()
             .expect("git init");

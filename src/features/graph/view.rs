@@ -519,5 +519,5 @@ pub(crate) fn format_timestamp(unix: i64) -> String {
 }
 
 fn is_leap(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
