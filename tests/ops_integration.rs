@@ -31,6 +31,10 @@ fn git(dir: &Path, args: &[&str]) -> String {
         .args(["-c", "color.ui=never", "--no-pager"])
         .args(args)
         .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "T")
+        .env("GIT_AUTHOR_EMAIL", "t@t.com")
+        .env("GIT_COMMITTER_NAME", "T")
+        .env("GIT_COMMITTER_EMAIL", "t@t.com")
         .output()
         .unwrap_or_else(|e| panic!("spawn git {}: {}", args.join(" "), e));
 
@@ -47,39 +51,19 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 /// Initialise a repo with user config and an initial empty commit on `main`.
+/// Uses `git symbolic-ref` to force the branch name regardless of the system's
+/// `init.defaultBranch` config.
 fn init_repo(path: &Path) {
-    git(path, &["init", "-b", "main", "-q"]);
-    git(
-        path,
-        &[
-            "-c",
-            "user.email=t@t.com",
-            "-c",
-            "user.name=T",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-    );
+    git(path, &["init", "-q"]);
+    git(path, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(path, &["commit", "--allow-empty", "-m", "initial"]);
 }
 
 /// Write a file and commit it with the given message.
 fn commit_file(dir: &Path, filename: &str, content: &str, message: &str) {
     std::fs::write(dir.join(filename), content).expect("write file");
     git(dir, &["add", "--", filename]);
-    git(
-        dir,
-        &[
-            "-c",
-            "user.email=t@t.com",
-            "-c",
-            "user.name=T",
-            "commit",
-            "-m",
-            message,
-        ],
-    );
+    git(dir, &["commit", "-m", message]);
 }
 
 /// Build a `CliBackend` rooted at the canonical toplevel of `path`.
