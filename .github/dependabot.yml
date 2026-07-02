@@ -11,3 +11,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # The MSRV check job must pin rust-toolchain to the declared MSRV.
+      # Dependabot bumping it defeats the purpose of the check.
+      - dependency-name: "dtolnay/rust-toolchain"
