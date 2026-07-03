@@ -58,39 +58,27 @@ giv has six modes, switched with number keys:
 In **Inspect** mode, press `i` (or `Enter`) to open the prompt, type a ref, and
 `Enter` to show that commit's metadata and diff. Use `↑`/`↓` to scroll.
 
-### Responsive layout
+### Layout
 
-giv adapts its pane layout to the terminal width:
+Every mode renders a two-pane layout — a list on the left and a detail/diff
+panel on the right — at every terminal width:
 
-- **Narrow terminals (< 150 cols):** the historical two-pane layout — a list on
-  the left and a detail/diff panel on the right. `Tab` cycles focus between the
-  two panes.
-- **Wide terminals (>= 150 cols):** Status and Graph modes grow a third pane.
-  The left column splits vertically into **Changes** (top) + **Graph** (bottom),
-  and the right column is the **Diff** / detail panel (full height):
+```
++--------+----------+
+| List   |          |
+| (left) |  Diff    |
+|        | (right)  |
++--------+----------+
+```
 
-  ```
-  +----------+---------+
-  | Changes  |         |
-  |  (top)   |  Diff   |
-  +----------+ (right) |
-  | Graph    |         |
-  | (bottom) |         |
-  +----------+---------+
-  ```
+`Tab` cycles focus between the two panes (`Left → Main → Left`). The diff pane
+always reflects whichever list panel holds focus — the selected commit's diff
+when the graph is focused, the working-tree file diff when the change list is
+focused.
 
-  `Tab` cycles `Left → Middle → Right → Left` (Changes → Graph → Diff). The diff
-  pane always reflects whichever list panel holds focus — the selected commit's
-  diff when the graph is focused, the working-tree file diff when the change
-  list is focused. Other modes (Branches / Worktrees / Stashes / Inspect) keep
-  the two-pane layout even when wide, since they have no natural third pane.
-
-**Focus-weighted split:** the focused pane always gets the most space. In
-two-pane mode the focused pane gets 65%. In three-pane mode the left column
-widens to 60% when Changes or Graph is focused (and the focused half grows),
-or the right column widens to 60% when Diff is focused. Tabbing shifts the
-weight smoothly; the pane structure never changes, so your eyes stay on the
-content without reflow-induced jumps.
+**Focus-weighted split:** the focused pane gets 65% of the width, the other
+35%. Tabbing shifts the weight smoothly; the pane structure never changes, so
+your eyes stay on the content without reflow-induced jumps.
 
 ### Branch compare
 
@@ -134,6 +122,7 @@ selection.
 | `/`      | Open incremental search bar     |
 | `T`      | Cycle through themes            |
 | `C`      | Continue in-progress git op     |
+| `S`      | Skip current commit of in-progress git op |
 | `A`      | Abort in-progress git op when one is active |
 
 ### Navigation (all modes)
@@ -152,11 +141,14 @@ selection.
 
 | Key        | Action                          |
 |------------|---------------------------------|
+| `Enter`    | Focus diff panel (scroll with `↑`/`↓`) |
+| `Esc`      | Return to file list             |
 | `Space`    | Stage / unstage selected file   |
 | `a`        | Stage all changes               |
 | `A`        | Unstage all changes (or abort if a git op is active) |
 | `u`        | Unstage selected                |
 | `c`        | Open commit dialog              |
+| `e`        | Amend last commit               |
 | `d`        | Scroll diff down                |
 | `Ctrl-u`   | Scroll diff up                  |
 | `R`        | Mark conflict as resolved       |
@@ -168,25 +160,28 @@ selection.
 
 ### Graph mode
 
-| Key  | Action                                  |
-|------|-----------------------------------------|
-| `Enter` | Show diff for selected commit        |
-| `c`  | Cherry-pick selected commit             |
-| `v`  | Revert selected commit                  |
-| `x`  | Open reset menu (soft / mixed / hard)   |
-| `b`  | Rebase HEAD onto selected commit        |
-| `i`  | Interactive rebase from selected commit |
-| `t`  | Create tag on selected commit           |
-| `D`  | Delete selected tag                     |
-| `y`  | Copy (yank) commit SHA via OSC 52       |
-| `n`  | Jump to next search match               |
-| `=`  | Compare branches (`base..target` picker)|
-| `a`  | Toggle all branches / current branch only |
-| `m`  | Toggle first-parent merge folding       |
-| `l`  | Toggle branch lens against main         |
-| `f`  | Fetch                                   |
-| `F`  | Pull                                    |
-| `P`  | Push                                    |
+| Key     | Action                                  |
+|---------|-----------------------------------------|
+| `Enter` | Focus diff panel (scroll with `↑`/`↓`)  |
+| `Esc`   | Return to commit list                   |
+| `d`     | Scroll diff down                        |
+| `<`/`>` | Shrink / grow the graph split           |
+| `c`     | Cherry-pick selected commit             |
+| `v`     | Revert selected commit                  |
+| `x`     | Open reset menu (soft / mixed / hard)   |
+| `b`     | Rebase HEAD onto selected commit        |
+| `i`     | Interactive rebase from selected commit |
+| `t`     | Create tag on selected commit           |
+| `D`     | Delete selected tag                     |
+| `y`     | Copy (yank) commit SHA via OSC 52       |
+| `n`     | Jump to next search match               |
+| `=`     | Compare branches (`base..target` picker)|
+| `a`     | Toggle all branches / current branch only |
+| `m`     | Toggle first-parent merge folding       |
+| `l`     | Toggle branch lens against main         |
+| `f`     | Fetch                                   |
+| `F`     | Pull                                    |
+| `P`     | Push                                    |
 
 ### Branches mode
 
@@ -194,6 +189,7 @@ selection.
 |--------------|------------------------------|
 | `Enter`/`Space` | Checkout branch           |
 | `n`          | New branch (dialog)          |
+| `R`          | Rename branch (dialog)       |
 | `d`          | Delete branch                |
 | `m`          | Merge into HEAD              |
 | `r`          | Rebase HEAD onto branch      |
@@ -237,10 +233,10 @@ selection.
 
 | Key           | Action             |
 |---------------|--------------------|
-| `Enter`       | Confirm            |
+| `Enter`       | Confirm / submit   |
 | `Esc`         | Cancel             |
 | `Backspace`   | Delete character   |
-| `Ctrl+Enter`  | Submit commit msg  |
+| `Tab`         | Switch field (tag / compare dialogs) |
 
 ## Themes
 
@@ -264,9 +260,10 @@ Create `~/.config/giv/config.toml` to override defaults:
 theme = "tokyonight"
 
 # Commit graph density.
-# "spacious" (default) — 2 rows per commit, easier to read lane connectors.
-# "compact"            — 1 row per commit, shows more history at once.
-graph_mode = "spacious"
+# "compact" (default) — 1 row per commit, tight spacing, more history at once.
+# "spacious"          — 2 rows per commit (a blank edge row between commits),
+#                       easier to read lane connectors.
+graph_mode = "compact"
 
 # Diff presentation style.
 # "unified"    (default) — single-pane unified diff (like git diff).
@@ -298,8 +295,8 @@ src/
       └ view.rs · update.rs · keymap.rs   (graph also: layout/render/rebase_todo)
   ui/                # shared presentation
     mod.rs (root view, tabs, dispatch) · chrome/ · overlay/ · diff_view.rs
-    layout.rs (responsive breakpoint + focus-cycling pure logic)
-    dashboard.rs (wide-terminal 3-pane Graph|Changes|Diff composition)
+    layout.rs (width bucket + focus-cycling pure logic)
+    dashboard.rs (legacy 3-pane helper; not selected by current pane policy)
 ```
 
 When adding a mode-specific behaviour, edit that feature's `update.rs` /
