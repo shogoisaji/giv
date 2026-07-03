@@ -4,6 +4,8 @@ A terminal (TUI) git visualizer written in pure Rust.
 
 All git operations shell out to the `git` binary; no libgit2 dependency.
 
+![giv demo](docs/demo.gif)
+
 ## Install
 
 Requirements:
