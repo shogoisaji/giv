@@ -217,7 +217,9 @@ pub enum Action {
     PaletteConfirm,
     /// Mouse click on palette item row `row` (0-based within the item list).
     /// Sets the cursor to that item and dispatches it, like `PaletteConfirm`.
-    PaletteClick { row: usize },
+    PaletteClick {
+        row: usize,
+    },
 
     /// Open the search bar.
     OpenSearch,

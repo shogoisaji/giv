@@ -876,7 +876,9 @@ pub fn update(app: &mut App, action: Action) -> Effect {
             // clamp it, then behave like PaletteConfirm.
             let selected_action = app.palette.as_ref().and_then(|s| {
                 let scroll = app.ui.palette_scroll.get();
-                let idx = scroll.saturating_add(row).min(s.items.len().saturating_sub(1));
+                let idx = scroll
+                    .saturating_add(row)
+                    .min(s.items.len().saturating_sub(1));
                 s.items.get(idx).map(|item| item.action.clone())
             });
 
@@ -1639,13 +1641,15 @@ mod tests {
     #[test]
     fn confirm_task_push_passes_through_args() {
         let task = confirm_task(ConfirmOp::Push {
-            args: vec!["push".into(), "--set-upstream".into(), "origin".into(), "feat".into()],
+            args: vec![
+                "push".into(),
+                "--set-upstream".into(),
+                "origin".into(),
+                "feat".into(),
+            ],
         });
         assert_eq!(task.label, "push");
-        assert_eq!(
-            task.args,
-            vec!["push", "--set-upstream", "origin", "feat"]
-        );
+        assert_eq!(task.args, vec!["push", "--set-upstream", "origin", "feat"]);
         assert!(!task.check_op);
     }
 
@@ -1727,10 +1731,7 @@ mod tests {
         match app.dialog {
             Dialog::Confirm { pending, .. } => match pending {
                 ConfirmOp::Push { args } => {
-                    assert_eq!(
-                        args,
-                        vec!["push", "--set-upstream", "origin", "feat"]
-                    );
+                    assert_eq!(args, vec!["push", "--set-upstream", "origin", "feat"]);
                 }
                 other => panic!("expected Push, got {other:?}"),
             },

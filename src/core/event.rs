@@ -244,11 +244,7 @@ mod tests {
     use crossterm::event::MouseEvent;
 
     fn build_app() -> App {
-        App::new(
-            Box::new(MockBackend::new()),
-            Config::default(),
-        )
-        .expect("app builds")
+        App::new(Box::new(MockBackend::new()), Config::default()).expect("app builds")
     }
 
     fn left_click(app: &App, x: u16, y: u16) -> Action {
