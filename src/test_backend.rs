@@ -22,6 +22,8 @@ pub struct MockBackend {
     pub stashes: Vec<Stash>,
     pub op_in_progress: Option<OpInProgress>,
     pub last_commit_message: String,
+    /// Remotes returned by `remotes()`; empty by default.
+    pub remotes: Vec<(String, String)>,
     /// Recorded calls for assertion in tests.
     pub calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
@@ -145,7 +147,7 @@ impl GitBackend for MockBackend {
     }
 
     fn remotes(&self) -> anyhow::Result<Vec<(String, String)>> {
-        Ok(vec![])
+        Ok(self.remotes.clone())
     }
 
     fn checkout(&self, name: &str) -> anyhow::Result<()> {

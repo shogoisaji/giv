@@ -146,6 +146,7 @@ pub(crate) fn build_palette_items() -> Vec<PaletteItem> {
     item!("Fetch (all remotes)", "f", Action::Fetch);
     item!("Pull (ff-only)", "F", Action::Pull);
     item!("Push", "P", Action::Push);
+    item!("Force push (with lease)", "X", Action::ForcePush);
 
     // ── Branches ─────────────────────────────────────────────────────────────
     item!("Checkout branch", "Enter", Action::Checkout);

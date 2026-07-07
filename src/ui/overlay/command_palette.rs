@@ -113,6 +113,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // ── Item list ─────────────────────────────────────────────────────────────
     let list_area = layout[2];
     if list_area.height == 0 {
+        // Still record an empty rect so a stale click can't hit a previous frame.
+        app.ui.palette_list_rect.set(None);
         return;
     }
 
@@ -123,6 +125,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         0
     };
+
+    // Record the list area + scroll offset so the mouse handler can map a
+    // click y coordinate to an absolute palette item index.
+    app.ui.palette_list_rect.set(Some(list_area));
+    app.ui.palette_scroll.set(scroll_offset);
 
     let hint_col_width: usize = 12; // reserved on the right for key hints
     let label_col_width = (list_area.width as usize).saturating_sub(hint_col_width + 2);

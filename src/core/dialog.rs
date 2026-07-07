@@ -132,6 +132,20 @@ pub enum ConfirmOp {
     Merge {
         branch: String,
     },
+    /// `git fetch --all` — download remote refs without touching the working tree.
+    Fetch,
+    /// `git pull --ff-only` — fast-forward the current branch into its upstream.
+    Pull,
+    /// `git push` with pre-computed args (the caller resolves `--set-upstream`
+    /// and the remote/branch to use). `args` excludes the leading `git`.
+    Push {
+        args: Vec<String>,
+    },
+    /// `git push --force-with-lease` with pre-computed args. `args` excludes
+    /// the leading `git`.
+    ForcePush {
+        args: Vec<String>,
+    },
 }
 
 impl ConfirmOp {
@@ -167,6 +181,11 @@ impl ConfirmOp {
             // MergeSelected runs `merge(branch, no_ff=false)`, i.e. a normal
             // (fast-forward-allowed) merge — keep the preview accurate.
             ConfirmOp::Merge { branch } => format!("git merge {branch}"),
+            ConfirmOp::Fetch => "git fetch --all".to_string(),
+            ConfirmOp::Pull => "git pull --ff-only".to_string(),
+            ConfirmOp::Push { args } | ConfirmOp::ForcePush { args } => {
+                format!("git {}", args.join(" "))
+            }
         }
     }
 }
@@ -293,6 +312,59 @@ mod confirm_op_tests {
         assert_eq!(
             ConfirmOp::StashDrop { index: 0 }.command_preview(),
             "git stash drop stash@{0}"
+        );
+    }
+
+    #[test]
+    fn command_preview_fetch() {
+        assert_eq!(ConfirmOp::Fetch.command_preview(), "git fetch --all");
+    }
+
+    #[test]
+    fn command_preview_pull() {
+        assert_eq!(ConfirmOp::Pull.command_preview(), "git pull --ff-only");
+    }
+
+    #[test]
+    fn command_preview_push_plain() {
+        assert_eq!(
+            ConfirmOp::Push {
+                args: vec!["push".into()]
+            }
+            .command_preview(),
+            "git push"
+        );
+    }
+
+    #[test]
+    fn command_preview_push_set_upstream() {
+        assert_eq!(
+            ConfirmOp::Push {
+                args: vec![
+                    "push".into(),
+                    "--set-upstream".into(),
+                    "origin".into(),
+                    "feat".into()
+                ]
+            }
+            .command_preview(),
+            "git push --set-upstream origin feat"
+        );
+    }
+
+    #[test]
+    fn command_preview_force_push_with_lease() {
+        assert_eq!(
+            ConfirmOp::ForcePush {
+                args: vec![
+                    "push".into(),
+                    "--force-with-lease".into(),
+                    "origin".into(),
+                    "feat".into()
+                ]
+            }
+            .command_preview(),
+            "git push --force-with-lease origin feat"
         );
     }
 }
