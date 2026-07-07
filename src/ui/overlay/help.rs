@@ -144,6 +144,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         row("s", "Stash save (prompt)"),
         row("t", "Create tag"),
         row("f / F / P", "Fetch / Pull / Push"),
+        row("X", "Force push (with lease)"),
     ];
 
     // ── Right column content ──────────────────────────────────────────────────

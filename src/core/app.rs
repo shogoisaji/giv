@@ -136,6 +136,14 @@ pub struct UiState {
     /// (start_x, end_x) range of each tab within that row. Clicking inside a
     /// tab's range switches to that tab. Recorded by `render_mode_tabs`.
     pub tab_strip: Cell<TabStrip>,
+    /// Last-rendered command-palette item-list area (inner, inside borders).
+    /// Used by the mouse handler to map a click row to a palette item index.
+    /// `None` when the palette isn't rendered in the last frame.
+    pub palette_list_rect: Cell<Option<ratatui::layout::Rect>>,
+    /// Scroll offset of the palette item list in the last rendered frame —
+    /// the first visible item index. Combined with `palette_list_rect` to map
+    /// a click y coordinate to an absolute item index.
+    pub palette_scroll: Cell<usize>,
 }
 
 /// Recorded tab strip geometry for mouse click detection. The tabs are
@@ -195,6 +203,8 @@ impl UiState {
     pub fn reset_rects(&self) {
         self.panel_rects.set(PanelRects::default());
         self.tab_strip.set(TabStrip::default());
+        self.palette_list_rect.set(None);
+        self.palette_scroll.set(0);
     }
 }
 

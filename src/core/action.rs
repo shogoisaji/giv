@@ -106,12 +106,14 @@ pub enum Action {
     ConfirmDelete,
 
     // ── Network operations ───────────────────────────────────────────────────
-    /// `git fetch --all` in the background.
+    /// Open a confirm dialog for `git fetch --all`.
     Fetch,
-    /// `git pull --ff-only` in the background.
+    /// Open a confirm dialog for `git pull --ff-only`.
     Pull,
-    /// `git push` in the background.
+    /// Open a confirm dialog for `git push`.
     Push,
+    /// Open a confirm dialog for `git push --force-with-lease`.
+    ForcePush,
 
     // ── Worktrees mode ───────────────────────────────────────────────────────
     /// Open the "add worktree" dialog.
@@ -213,6 +215,11 @@ pub enum Action {
     PaletteDown,
     /// Confirm the highlighted palette item and dispatch its action.
     PaletteConfirm,
+    /// Mouse click on palette item row `row` (0-based within the item list).
+    /// Sets the cursor to that item and dispatches it, like `PaletteConfirm`.
+    PaletteClick {
+        row: usize,
+    },
 
     /// Open the search bar.
     OpenSearch,

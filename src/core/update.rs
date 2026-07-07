@@ -551,69 +551,42 @@ pub fn update(app: &mut App, action: Action) -> Effect {
         }
 
         // ── Network operations ───────────────────────────────────────────────
+        // Each opens a Confirm dialog showing the exact git command before
+        // running it. The actual execution happens in `Action::ConfirmDelete`
+        // via `execute_confirm_op` → `confirm_task`.
         Action::Fetch => {
-            let root = app.repo.backend.root().to_path_buf();
-            let label = "fetch".to_string();
-            app.running_task = Some(label.clone());
-            app.status_message = Some("Fetching…".into());
-            git::spawn_git(
-                root,
-                vec!["fetch".to_string(), "--all".to_string()],
-                label,
-                app.task_tx.clone(),
-                true,
-                false,
-            );
+            app.dialog = Dialog::Confirm {
+                message: "Fetch from all remotes?".into(),
+                pending: ConfirmOp::Fetch,
+            };
             Effect::Refresh
         }
 
         Action::Pull => {
-            let root = app.repo.backend.root().to_path_buf();
-            let label = "pull".to_string();
-            app.running_task = Some(label.clone());
-            app.status_message = Some("Pulling…".into());
-            git::spawn_git(
-                root,
-                vec!["pull".to_string(), "--ff-only".to_string()],
-                label,
-                app.task_tx.clone(),
-                true,
-                false,
-            );
+            app.dialog = Dialog::Confirm {
+                message: "Pull (fast-forward only) from upstream?".into(),
+                pending: ConfirmOp::Pull,
+            };
             Effect::Refresh
         }
 
         Action::Push => {
-            let root = app.repo.backend.root().to_path_buf();
-            let label = "push".to_string();
-            app.running_task = Some(label.clone());
-            app.status_message = Some("Pushing…".into());
-
-            // A branch with no upstream (never pushed) needs
-            // `--set-upstream <remote> <branch>`; bare `git push` would fail with
-            // "no upstream branch". Prefer 'origin', else the first remote.
-            let args = match (
-                app.repo.status.upstream.is_none(),
-                app.repo.status.branch.clone(),
-            ) {
-                (true, Some(branch)) => {
-                    let remotes = app.repo.backend.remotes().unwrap_or_default();
-                    let remote = remotes
-                        .iter()
-                        .find(|(n, _)| n == "origin")
-                        .or_else(|| remotes.first())
-                        .map(|(n, _)| n.clone());
-                    match remote {
-                        Some(r) => {
-                            vec!["push".to_string(), "--set-upstream".to_string(), r, branch]
-                        }
-                        None => vec!["push".to_string()],
-                    }
-                }
-                _ => vec!["push".to_string()],
+            app.dialog = Dialog::Confirm {
+                message: "Push current branch to its upstream?".into(),
+                pending: ConfirmOp::Push {
+                    args: push_args(app, false),
+                },
             };
+            Effect::Refresh
+        }
 
-            git::spawn_git(root, args, label, app.task_tx.clone(), true, false);
+        Action::ForcePush => {
+            app.dialog = Dialog::Confirm {
+                message: "Force-push (with lease) current branch?".into(),
+                pending: ConfirmOp::ForcePush {
+                    args: push_args(app, true),
+                },
+            };
             Effect::Refresh
         }
 
@@ -887,6 +860,27 @@ pub fn update(app: &mut App, action: Action) -> Effect {
                 .as_ref()
                 .and_then(|s| s.items.get(s.cursor))
                 .map(|item| item.action.clone());
+
+            app.palette = None;
+
+            if let Some(action) = selected_action {
+                update(app, action)
+            } else {
+                Effect::Refresh
+            }
+        }
+
+        Action::PaletteClick { row } => {
+            // A mouse click on the palette item list: translate the visible
+            // row to an absolute item index (adding the render scroll offset),
+            // clamp it, then behave like PaletteConfirm.
+            let selected_action = app.palette.as_ref().and_then(|s| {
+                let scroll = app.ui.palette_scroll.get();
+                let idx = scroll
+                    .saturating_add(row)
+                    .min(s.items.len().saturating_sub(1));
+                s.items.get(idx).map(|item| item.action.clone())
+            });
 
             app.palette = None;
 
@@ -1213,6 +1207,26 @@ fn confirm_task(pending: ConfirmOp) -> GitTaskSpec {
             args: vec!["merge".into(), "--no-edit".into(), branch],
             check_op: true,
         },
+        ConfirmOp::Fetch => GitTaskSpec {
+            label: "fetch".into(),
+            args: vec!["fetch".into(), "--all".into()],
+            check_op: false,
+        },
+        ConfirmOp::Pull => GitTaskSpec {
+            label: "pull".into(),
+            args: vec!["pull".into(), "--ff-only".into()],
+            check_op: false,
+        },
+        ConfirmOp::Push { args } => GitTaskSpec {
+            label: "push".into(),
+            args,
+            check_op: false,
+        },
+        ConfirmOp::ForcePush { args } => GitTaskSpec {
+            label: "force-push".into(),
+            args,
+            check_op: false,
+        },
     }
 }
 
@@ -1234,6 +1248,37 @@ fn start_git_task(
         refresh_after,
         check_op,
     );
+}
+
+/// Build the `git push` arg vector for the current branch.
+///
+/// A branch with no upstream (never pushed) needs
+/// `--set-upstream <remote> <branch>`; bare `git push` would fail with
+/// "no upstream branch". Prefer `origin`, else the first remote.
+///
+/// When `force` is true, `--force-with-lease` is prepended after `push`.
+fn push_args(app: &App, force: bool) -> Vec<String> {
+    let mut args = vec!["push".to_string()];
+    if force {
+        args.push("--force-with-lease".to_string());
+    }
+    if let (true, Some(branch)) = (
+        app.repo.status.upstream.is_none(),
+        app.repo.status.branch.clone(),
+    ) {
+        let remotes = app.repo.backend.remotes().unwrap_or_default();
+        let remote = remotes
+            .iter()
+            .find(|(n, _)| n == "origin")
+            .or_else(|| remotes.first())
+            .map(|(n, _)| n.clone());
+        if let Some(r) = remote {
+            args.push("--set-upstream".to_string());
+            args.push(r);
+            args.push(branch);
+        }
+    }
+    args
 }
 
 /// After a git operation that may produce conflicts, refresh `op_in_progress`
@@ -1575,6 +1620,253 @@ mod tests {
         assert_eq!(task.label, "merge dev");
         assert_eq!(task.args, vec!["merge", "--no-edit", "dev"]);
         assert!(task.check_op);
+    }
+
+    #[test]
+    fn confirm_task_fetch_builds_args() {
+        let task = confirm_task(ConfirmOp::Fetch);
+        assert_eq!(task.label, "fetch");
+        assert_eq!(task.args, vec!["fetch", "--all"]);
+        assert!(!task.check_op);
+    }
+
+    #[test]
+    fn confirm_task_pull_builds_args() {
+        let task = confirm_task(ConfirmOp::Pull);
+        assert_eq!(task.label, "pull");
+        assert_eq!(task.args, vec!["pull", "--ff-only"]);
+        assert!(!task.check_op);
+    }
+
+    #[test]
+    fn confirm_task_push_passes_through_args() {
+        let task = confirm_task(ConfirmOp::Push {
+            args: vec![
+                "push".into(),
+                "--set-upstream".into(),
+                "origin".into(),
+                "feat".into(),
+            ],
+        });
+        assert_eq!(task.label, "push");
+        assert_eq!(task.args, vec!["push", "--set-upstream", "origin", "feat"]);
+        assert!(!task.check_op);
+    }
+
+    #[test]
+    fn confirm_task_force_push_passes_through_args() {
+        let task = confirm_task(ConfirmOp::ForcePush {
+            args: vec![
+                "push".into(),
+                "--force-with-lease".into(),
+                "origin".into(),
+                "feat".into(),
+            ],
+        });
+        assert_eq!(task.label, "force-push");
+        assert_eq!(
+            task.args,
+            vec!["push", "--force-with-lease", "origin", "feat"]
+        );
+        assert!(!task.check_op);
+    }
+
+    // ── Network confirm-dialog flow ──────────────────────────────────────────
+
+    #[test]
+    fn fetch_opens_confirm_dialog_instead_of_running() {
+        let mut app = build_app(MockBackend::new());
+        update(&mut app, Action::Fetch);
+        assert!(matches!(
+            app.dialog,
+            Dialog::Confirm {
+                ref pending,
+                ..
+            } if matches!(pending, ConfirmOp::Fetch)
+        ));
+        assert!(app.running_task.is_none());
+    }
+
+    #[test]
+    fn pull_opens_confirm_dialog_instead_of_running() {
+        let mut app = build_app(MockBackend::new());
+        update(&mut app, Action::Pull);
+        assert!(matches!(
+            app.dialog,
+            Dialog::Confirm {
+                ref pending,
+                ..
+            } if matches!(pending, ConfirmOp::Pull)
+        ));
+        assert!(app.running_task.is_none());
+    }
+
+    #[test]
+    fn push_opens_confirm_dialog_with_plain_args_when_upstream_set() {
+        let mut b = MockBackend::new();
+        b.status.branch = Some("main".into());
+        b.status.upstream = Some("origin/main".into());
+        let mut app = build_app(b);
+        update(&mut app, Action::Push);
+        match app.dialog {
+            Dialog::Confirm { pending, .. } => match pending {
+                ConfirmOp::Push { args } => {
+                    assert_eq!(args, vec!["push"]);
+                }
+                other => panic!("expected Push, got {other:?}"),
+            },
+            other => panic!("expected Confirm dialog, got {other:?}"),
+        }
+        assert!(app.running_task.is_none());
+    }
+
+    #[test]
+    fn push_opens_confirm_dialog_with_set_upstream_when_no_upstream() {
+        let mut b = MockBackend::new();
+        b.status.branch = Some("feat".into());
+        b.status.upstream = None;
+        b.remotes = vec![("origin".into(), "url".into())];
+        let mut app = build_app(b);
+        update(&mut app, Action::Push);
+        match app.dialog {
+            Dialog::Confirm { pending, .. } => match pending {
+                ConfirmOp::Push { args } => {
+                    assert_eq!(args, vec!["push", "--set-upstream", "origin", "feat"]);
+                }
+                other => panic!("expected Push, got {other:?}"),
+            },
+            other => panic!("expected Confirm dialog, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn force_push_opens_confirm_dialog_with_force_with_lease() {
+        let mut b = MockBackend::new();
+        b.status.branch = Some("feat".into());
+        b.status.upstream = Some("origin/feat".into());
+        let mut app = build_app(b);
+        update(&mut app, Action::ForcePush);
+        match app.dialog {
+            Dialog::Confirm { pending, .. } => match pending {
+                ConfirmOp::ForcePush { args } => {
+                    assert_eq!(args, vec!["push", "--force-with-lease"]);
+                }
+                other => panic!("expected ForcePush, got {other:?}"),
+            },
+            other => panic!("expected Confirm dialog, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn force_push_with_no_upstream_includes_set_upstream() {
+        let mut b = MockBackend::new();
+        b.status.branch = Some("feat".into());
+        b.status.upstream = None;
+        b.remotes = vec![("origin".into(), "url".into())];
+        let mut app = build_app(b);
+        update(&mut app, Action::ForcePush);
+        match app.dialog {
+            Dialog::Confirm { pending, .. } => match pending {
+                ConfirmOp::ForcePush { args } => {
+                    assert_eq!(
+                        args,
+                        vec![
+                            "push",
+                            "--force-with-lease",
+                            "--set-upstream",
+                            "origin",
+                            "feat"
+                        ]
+                    );
+                }
+                other => panic!("expected ForcePush, got {other:?}"),
+            },
+            other => panic!("expected Confirm dialog, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirming_fetch_spawns_git_task() {
+        let mut app = build_app(MockBackend::new());
+        // Open the confirm dialog, then confirm it.
+        update(&mut app, Action::Fetch);
+        update(&mut app, Action::ConfirmDelete);
+        assert_eq!(app.running_task.as_deref(), Some("fetch"));
+        assert!(matches!(app.dialog, Dialog::None));
+    }
+
+    #[test]
+    fn confirming_push_spawns_git_task() {
+        let mut b = MockBackend::new();
+        b.status.branch = Some("main".into());
+        b.status.upstream = Some("origin/main".into());
+        let mut app = build_app(b);
+        update(&mut app, Action::Push);
+        update(&mut app, Action::ConfirmDelete);
+        assert_eq!(app.running_task.as_deref(), Some("push"));
+        assert!(matches!(app.dialog, Dialog::None));
+    }
+
+    #[test]
+    fn canceling_fetch_dialog_runs_nothing() {
+        let mut app = build_app(MockBackend::new());
+        update(&mut app, Action::Fetch);
+        update(&mut app, Action::CancelDialog);
+        assert!(matches!(app.dialog, Dialog::None));
+        assert!(app.running_task.is_none());
+    }
+
+    // ── Palette click ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn palette_click_dispatches_action_of_clicked_item() {
+        use crate::palette::PaletteState;
+        let mut app = build_app(MockBackend::new());
+        app.palette = Some(PaletteState::new());
+        // Find the index of the "Fetch (all remotes)" item, then click its row.
+        let fetch_idx = app
+            .palette
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .position(|i| i.label.contains("Fetch"))
+            .expect("palette has a Fetch item");
+        // Simulate the render scroll offset = 0 and a click on row = fetch_idx.
+        app.ui.palette_scroll.set(0);
+        update(&mut app, Action::PaletteClick { row: fetch_idx });
+        // Fetch now opens a confirm dialog (it no longer runs directly).
+        assert!(matches!(
+            app.dialog,
+            Dialog::Confirm { ref pending, .. } if matches!(pending, ConfirmOp::Fetch)
+        ));
+        assert!(app.palette.is_none());
+    }
+
+    #[test]
+    fn palette_click_clamps_row_past_end_to_last_item() {
+        use crate::palette::PaletteState;
+        let mut app = build_app(MockBackend::new());
+        app.palette = Some(PaletteState::new());
+        let total = app.palette.as_ref().unwrap().items.len();
+        // A click far below the last item should clamp to the last item, not
+        // panic on index-out-of-bounds.
+        app.ui.palette_scroll.set(0);
+        update(&mut app, Action::PaletteClick { row: total + 50 });
+        // The palette closes regardless; the last item's action was dispatched.
+        assert!(app.palette.is_none());
+    }
+
+    #[test]
+    fn palette_click_with_scroll_offset_adds_offset_to_row() {
+        use crate::palette::PaletteState;
+        let mut app = build_app(MockBackend::new());
+        app.palette = Some(PaletteState::new());
+        // Pretend the renderer scrolled down 5 items.
+        app.ui.palette_scroll.set(5);
+        // Row 0 of the visible list = absolute item index 5.
+        update(&mut app, Action::PaletteClick { row: 0 });
+        assert!(app.palette.is_none());
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub(crate) fn resolve(key: KeyEvent) -> Action {
         KeyCode::Char('f') if key.modifiers == KeyModifiers::NONE => Action::Fetch,
         KeyCode::Char('F') => Action::Pull,
         KeyCode::Char('P') => Action::Push,
+        KeyCode::Char('X') => Action::ForcePush,
         _ => Action::None,
     }
 }
